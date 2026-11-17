@@ -1,0 +1,936 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<style>
+    html, body { margin: 0; padding: 0; }
+    body { overscroll-behavior: none; }
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+  </style>
+<script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            surface: "#ffffff",
+            "surface-container": "#f1f5f9",
+            "on-surface": "#0f172a",
+            "on-surface-variant": "#64748b",
+            outline: "#e2e8f0",
+            "state-attention": "#ef4444",
+            "state-executing": "#3b82f6",
+            "state-idle": "#94a3b8",
+            "status-blocked": "#f59e0b",
+            "border-subtle": "#e2e8f0"
+          },
+          fontFamily: {
+            body: ["Inter", "sans-serif"],
+            code: ["JetBrains Mono", "monospace"]
+          }
+        }
+      }
+    };
+  </script>
+</head>
+<body class="bg-[#f8fafc] font-body text-[13px] text-on-surface select-none antialiased h-screen overflow-hidden flex">
+
+<!-- ============ DSH 宿主侧栏（不是插件内容，仅作上下文示意） ============ -->
+<aside class="w-[260px] flex-none bg-white border-r border-border-subtle flex flex-col z-20">
+<div class="h-12 px-3 flex items-center justify-between flex-none">
+<div class="flex items-center gap-1.5">
+<svg class="w-5 h-5 text-slate-900" fill="currentColor" viewbox="0 0 24 24">
+<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"></path>
+</svg>
+<span class="font-bold text-[14px] text-slate-900 tracking-tight">deepseek</span>
+<span class="px-1.5 py-0.5 bg-slate-900 text-white rounded text-[9px] font-semibold uppercase tracking-wider font-code">HARNESS</span>
+</div>
+</div>
+<div class="px-3 py-1.5 flex-none">
+<button class="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-white border border-slate-200 text-slate-800 shadow-sm hover:border-slate-300 hover:bg-slate-50 font-medium text-[12px] transition-all" type="button">
+<span class="material-symbols-outlined text-[15px] text-slate-600">add</span>
+<span>新会话</span>
+</button>
+</div>
+<div class="flex-1 overflow-y-auto px-2 py-2 space-y-4">
+<div class="space-y-0.5">
+<a class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg bg-slate-200/70 text-slate-900 font-semibold text-[12px]" href="#">
+<span class="material-symbols-outlined text-[17px] text-slate-800">check_box</span>
+<span class="flex-1">任务看板</span>
+<span class="w-1.5 h-1.5 rounded-full bg-blue-600"></span>
+</a>
+<a class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 font-medium text-[12px]" href="#">
+<span class="material-symbols-outlined text-[17px] text-slate-500">extension</span>
+<span class="flex-1">插件</span>
+</a>
+<a class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 font-medium text-[12px]" href="#">
+<span class="material-symbols-outlined text-[17px] text-slate-500">smart_toy</span>
+<span class="flex-1">自动化任务</span>
+</a>
+</div>
+<div class="space-y-1">
+<div class="flex items-center justify-between px-2.5 py-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+<span>工作区</span>
+<div class="flex items-center gap-1">
+<button class="text-slate-400 hover:text-slate-700"><span class="material-symbols-outlined text-[13px]">search</span></button>
+<button class="text-slate-400 hover:text-slate-700"><span class="material-symbols-outlined text-[13px]">add</span></button>
+</div>
+</div>
+<div class="space-y-0.5">
+<div class="flex items-center justify-between px-2.5 py-1 rounded-md text-slate-700 hover:bg-slate-100 cursor-pointer">
+<div class="flex items-center gap-2 truncate">
+<span class="material-symbols-outlined text-[15px] text-blue-500">folder</span>
+<span class="text-[12px] font-medium truncate">tavlo-dsh-plugins</span>
+</div>
+</div>
+<div class="pl-6 pr-2 py-1 flex items-center justify-between text-[11px] text-slate-500 hover:bg-slate-100 rounded cursor-pointer">
+<span class="truncate">设计 dsh 任务面板功能</span>
+<span class="text-[10px] text-slate-400 font-code">4分钟</span>
+</div>
+<div class="pl-6 pr-2 py-1 flex items-center justify-between text-[11px] text-slate-500 hover:bg-slate-100 rounded cursor-pointer">
+<span class="truncate">DSH 插件发布与命名问题</span>
+<span class="text-[10px] text-slate-400 font-code">22分钟</span>
+</div>
+<div class="flex items-center justify-between px-2.5 py-1 rounded-md text-slate-700 hover:bg-slate-100 cursor-pointer">
+<div class="flex items-center gap-2 truncate">
+<span class="material-symbols-outlined text-[15px] text-slate-400">folder</span>
+<span class="text-[12px] truncate">acme-web</span>
+</div>
+</div>
+<div class="flex items-center justify-between px-2.5 py-1 rounded-md text-slate-700 hover:bg-slate-100 cursor-pointer">
+<div class="flex items-center gap-2 truncate">
+<span class="material-symbols-outlined text-[15px] text-slate-400">folder</span>
+<span class="text-[12px] truncate">CLI-Manager</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="p-2.5 border-t border-border-subtle bg-white flex items-center justify-between text-[11px] flex-none">
+<div class="flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+<span class="font-code text-slate-600">DeepSeek Core: Ready</span>
+</div>
+</div>
+</aside>
+
+<!-- ============ 插件主面板 ============ -->
+<main class="flex-1 flex flex-col min-w-0 overflow-hidden">
+
+<!-- 顶栏 -->
+<div class="h-12 px-4 bg-white border-b border-border-subtle flex items-center justify-between flex-none">
+<div class="flex items-center gap-3">
+<div class="flex items-center gap-2">
+<div class="w-6 h-6 rounded bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-700">
+<span class="material-symbols-outlined text-[16px]">view_kanban</span>
+</div>
+<h1 class="font-bold text-[15px] text-slate-900 tracking-tight">任务</h1>
+</div>
+<div class="h-4 w-px bg-slate-200"></div>
+<div class="relative flex items-center w-56">
+<span class="material-symbols-outlined absolute left-2.5 text-[15px] text-slate-400 pointer-events-none">search</span>
+<input class="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-slate-400 focus:bg-white pl-8 pr-3 py-1 rounded-md text-[12px] text-slate-800 placeholder:text-slate-400 focus:outline-none transition-all" id="search-input" placeholder="搜索标题或描述..." type="text"/>
+</div>
+<!-- 筛选 -->
+<div class="relative" id="filter-root">
+<button class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium text-[12px] transition-colors" data-menu-trigger="filter" type="button">
+<span class="material-symbols-outlined text-[15px] text-slate-500">filter_list</span>
+<span>筛选</span>
+<span class="material-symbols-outlined text-[14px] text-slate-400">arrow_drop_down</span>
+</button>
+<div class="hidden absolute left-0 top-full mt-1.5 w-56 p-2 rounded-lg bg-white border border-slate-200 shadow-lg z-50" data-menu="filter">
+<div class="px-2 py-1 text-slate-400 font-medium text-[10px] uppercase tracking-wider">按工作区</div>
+<label class="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700 cursor-pointer"><input checked="" class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/><span>acme-web</span></label>
+<label class="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700 cursor-pointer"><input checked="" class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/><span>tavlo-dsh-plugins</span></label>
+<label class="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700 cursor-pointer"><input checked="" class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/><span>CLI-Manager</span></label>
+<div class="h-px bg-slate-100 my-1"></div>
+<label class="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700 cursor-pointer"><input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" id="show-cancelled" type="checkbox"/><span>显示已取消任务</span></label>
+</div>
+</div>
+</div>
+<div class="flex items-center gap-2">
+<div class="hidden items-center gap-2 bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-md text-blue-700 text-[12px]" id="batch-bar">
+<span>已选 <b class="font-semibold text-blue-900" id="batch-count">0</b> 项</span>
+<button class="px-2 py-0.5 rounded bg-blue-600 text-white text-[11px] font-medium hover:bg-blue-700" id="batch-launch">开始所选</button>
+<button class="px-1 text-slate-500 hover:text-slate-800 text-[11px]" id="batch-exit">退出</button>
+</div>
+<button class="flex items-center gap-1 px-3 py-1 bg-slate-900 text-white hover:bg-slate-800 rounded-md font-medium text-[12px] shadow-sm transition-all active:scale-95" id="new-task" type="button">
+<span class="material-symbols-outlined text-[15px]">add</span>
+<span>新建任务</span>
+</button>
+<button class="p-1.5 rounded-md bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 hover:text-slate-900 transition-colors" id="multi-toggle" title="多选模式" type="button">
+<span class="material-symbols-outlined text-[16px]">checklist</span>
+</button>
+</div>
+</div>
+
+<!-- 告警条 -->
+<section class="flex-none bg-[#fff5f5] border-b border-[#fee2e2] px-4 py-1.5 flex items-center justify-between" id="alert-bar">
+<div class="flex items-center gap-2 text-[12px]">
+<span class="material-symbols-outlined text-[16px] text-red-500">error</span>
+<span class="font-semibold text-red-800 tracking-tight">2 件事在等你</span>
+<span class="text-red-600/90">· 接入支付、补测试</span>
+</div>
+<div class="flex items-center gap-2">
+<button class="text-[11px] font-semibold px-2.5 py-0.5 bg-red-600 hover:bg-red-700 text-white rounded" id="alert-expand">全部处理</button>
+<button class="text-red-400 hover:text-red-700 p-0.5 rounded" id="alert-dismiss" title="暂时收起（出现新的待办会重新显示）">
+<span class="material-symbols-outlined text-[16px]">close</span>
+</button>
+</div>
+</section>
+<div class="hidden flex-none bg-[#fef2f2] border-b border-[#fecaca] px-4 py-2 flex-col gap-1.5" id="alert-tray">
+<div class="flex items-center justify-between text-[12px]">
+<div class="flex items-center gap-2 min-w-0">
+<span class="w-2 h-2 rounded-full bg-red-500 flex-none"></span>
+<span class="font-semibold text-slate-900 flex-none">接入支付</span>
+<span class="text-slate-600 truncate">· 待审批：允许修改 <code class="px-1 py-0.5 bg-white/80 rounded border border-red-200 text-red-700 font-code text-[11px]">src/pay/schema.sql</code> 结构定义</span>
+</div>
+<button class="flex-none px-2.5 py-0.5 rounded bg-white border border-red-200 hover:bg-red-50 text-red-700 font-medium text-[11px] flex items-center gap-1">
+<span>打开会话</span><span class="material-symbols-outlined text-[13px]">arrow_forward</span>
+</button>
+</div>
+<div class="flex items-center justify-between text-[12px]">
+<div class="flex items-center gap-2 min-w-0">
+<span class="w-2 h-2 rounded-full bg-amber-500 flex-none"></span>
+<span class="font-semibold text-slate-900 flex-none">补测试</span>
+<span class="text-slate-600 truncate">· 待回答：确认网关超时重试窗口间隔是否保持 15s</span>
+</div>
+<button class="flex-none px-2.5 py-0.5 rounded bg-white border border-red-200 hover:bg-red-50 text-red-700 font-medium text-[11px] flex items-center gap-1">
+<span>打开会话</span><span class="material-symbols-outlined text-[13px]">arrow_forward</span>
+</button>
+</div>
+</div>
+
+<!-- 看板区 + 浮层详情 -->
+<div class="flex-1 relative overflow-hidden">
+
+<!-- 看板：始终占满主区宽度，不被详情挤压 -->
+<div class="absolute inset-0 overflow-x-auto overflow-y-hidden p-4" id="board">
+<div class="flex gap-3.5 h-full">
+
+<!-- 待开始 -->
+<div class="flex-1 min-w-[280px] max-w-[380px] flex flex-col bg-[#eef2f7] border border-slate-200/70 rounded-xl overflow-hidden">
+<div class="px-3 py-2.5 flex items-center justify-between flex-none">
+<div class="flex items-center gap-1.5">
+<span class="font-semibold text-[13px] text-slate-800">待开始</span>
+<span class="min-w-[16px] h-4 px-1 rounded-full bg-white border border-slate-200 flex items-center justify-center font-code text-[10px] text-slate-600 font-medium">3</span>
+</div>
+<button class="text-slate-400 hover:text-slate-700 p-0.5 rounded hover:bg-slate-200/50 transition-colors"><span class="material-symbols-outlined text-[16px]">more_horiz</span></button>
+</div>
+<div class="flex-1 overflow-y-auto px-2 pb-2 space-y-2" id="col-todo">
+
+<!-- 未启动 · 无色条（透明）+ 空心点 -->
+<div class="task-card group relative bg-white border border-border-subtle hover:border-slate-300 rounded-lg p-2.5 pl-3 shadow-sm hover:shadow transition-all cursor-pointer overflow-hidden"
+     data-task-id="t-101" data-stage="todo" data-has-session="0" data-cancelled="0"
+     data-title="架构重构 RFC 初稿"
+     data-brief="梳理 DSH 扩展插件沙箱上下文机制，编写 RFC 文档及时序图。"
+     data-full-brief="梳理 DSH 扩展插件沙箱上下文机制，编写 RFC 文档及时序图。重点说明插件在加载期、会话期各自能拿到哪些服务，以及上下文是怎么沿 fiber 传递的。"
+     data-workspace="tavlo-dsh-plugins" data-path="F:\github\tavlo-dsh-plugins" data-model="sonnet" data-preset="默认" data-state="未启动" data-state-tone="idle-none" data-subtasks="0/3">
+<div class="absolute left-0 top-0 bottom-0 w-[3px] bg-transparent"></div>
+<div class="batch-checkbox hidden absolute top-2 left-2 z-10"><input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/></div>
+<div class="flex items-start justify-between gap-1 mb-1">
+<h2 class="font-semibold text-[13px] text-slate-900 truncate flex-1 tracking-tight">架构重构 RFC 初稿</h2>
+<div class="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity flex-none">
+<button class="launch-btn p-0.5 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900" title="启动任务"><span class="material-symbols-outlined text-[15px]">play_arrow</span></button>
+<button class="p-0.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700" title="更多"><span class="material-symbols-outlined text-[15px]">more_vert</span></button>
+</div>
+</div>
+<p class="text-[12px] text-slate-500 line-clamp-2 mb-1.5 leading-[18px]">梳理 DSH 扩展插件沙箱上下文机制，编写 RFC 文档及时序图。</p>
+<div class="flex items-center gap-1.5 mb-1.5 text-[11px] text-slate-500">
+<span class="w-[7px] h-[7px] rounded-full border-[1.5px] border-slate-400"></span>
+<span class="truncate">未启动 · 2 天前</span>
+</div>
+<div class="font-code text-[11px] text-slate-400 truncate">tavlo-dsh-plugins · sonnet · 0/3</div>
+</div>
+
+<div class="task-card group relative bg-white border border-border-subtle hover:border-slate-300 rounded-lg p-2.5 pl-3 shadow-sm hover:shadow transition-all cursor-pointer overflow-hidden"
+     data-task-id="t-102" data-stage="todo" data-has-session="0" data-cancelled="0"
+     data-title="补充 OpenAPI 接口导出器"
+     data-brief="基于 TypeScript AST 自动抽离 RPC 路径和入参返回类型。"
+     data-full-brief="基于 TypeScript AST 自动抽离 RPC 路径和入参返回类型，产出一份 OpenAPI 3.1 文档，并对 diff 做 CI 校验。"
+     data-workspace="labway-ssm-front" data-path="F:\work\labway\ssm-front" data-model="deepseek" data-preset="默认" data-state="未启动" data-state-tone="idle-none" data-subtasks="0/1">
+<div class="absolute left-0 top-0 bottom-0 w-[3px] bg-transparent"></div>
+<div class="batch-checkbox hidden absolute top-2 left-2 z-10"><input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/></div>
+<div class="flex items-start justify-between gap-1 mb-1">
+<h2 class="font-semibold text-[13px] text-slate-900 truncate flex-1 tracking-tight">补充 OpenAPI 接口导出器</h2>
+<div class="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity flex-none">
+<button class="launch-btn p-0.5 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900" title="启动任务"><span class="material-symbols-outlined text-[15px]">play_arrow</span></button>
+</div>
+</div>
+<p class="text-[12px] text-slate-500 line-clamp-2 mb-1.5 leading-[18px]">基于 TypeScript AST 自动抽离 RPC 路径和入参返回类型。</p>
+<div class="flex items-center gap-1.5 mb-1.5 text-[11px] text-slate-500">
+<span class="w-[7px] h-[7px] rounded-full border-[1.5px] border-slate-400"></span>
+<span class="truncate">未启动 · 14 小时前</span>
+</div>
+<div class="font-code text-[11px] text-slate-400 truncate">labway-ssm-front · deepseek · 0/1</div>
+</div>
+
+<!-- 空闲 · 灰色实心点 + 灰色色条 -->
+<div class="task-card group relative bg-white border border-border-subtle hover:border-slate-300 rounded-lg p-2.5 pl-3 shadow-sm hover:shadow transition-all cursor-pointer overflow-hidden"
+     data-task-id="t-103" data-stage="todo" data-has-session="1" data-cancelled="0"
+     data-title="优化 CLI 日志高亮"
+     data-brief="使用 Chalk 替换纯 ASCII 转义，支持主题色自适应输出。"
+     data-full-brief="使用 Chalk 替换纯 ASCII 转义，支持主题色自适应输出；同时统一 --no-color / NO_COLOR / FORCE_COLOR 三套环境变量的优先级。"
+     data-workspace="CLI-Manager" data-path="F:\work\cli-manager" data-model="haiku" data-preset="默认" data-state="空闲" data-state-tone="idle" data-subtasks="1/2">
+<div class="absolute left-0 top-0 bottom-0 w-[3px] bg-slate-300"></div>
+<div class="batch-checkbox hidden absolute top-2 left-2 z-10"><input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/></div>
+<div class="flex items-start justify-between gap-1 mb-1">
+<h2 class="font-semibold text-[13px] text-slate-900 truncate flex-1 tracking-tight">优化 CLI 日志高亮</h2>
+<div class="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity flex-none">
+<button class="launch-btn p-0.5 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900" title="启动任务"><span class="material-symbols-outlined text-[15px]">play_arrow</span></button>
+</div>
+</div>
+<p class="text-[12px] text-slate-500 line-clamp-2 mb-1.5 leading-[18px]">使用 Chalk 替换纯 ASCII 转义，支持主题色自适应输出。</p>
+<div class="flex items-center gap-1.5 mb-1.5 text-[11px] text-slate-600">
+<span class="w-[7px] h-[7px] rounded-full bg-slate-400"></span>
+<span class="truncate">空闲 · 昨天</span>
+</div>
+<div class="font-code text-[11px] text-slate-400 truncate">CLI-Manager · haiku · 1/2</div>
+</div>
+
+<!-- 已取消（默认隐藏，筛选器打开后可见） -->
+<div class="task-card hidden group relative bg-white/70 border border-dashed border-slate-300 rounded-lg p-2.5 pl-3 opacity-70 cursor-pointer overflow-hidden"
+     data-task-id="t-cxl" data-stage="todo" data-has-session="0" data-cancelled="1"
+     data-title="迁移旧版配置格式"
+     data-brief="把 .dshrc 迁移到 cordis.patch.yml 体系。"
+     data-full-brief="把 .dshrc 迁移到 cordis.patch.yml 体系，保留向后兼容读取。"
+     data-workspace="tavlo-dsh-plugins" data-path="F:\github\tavlo-dsh-plugins" data-model="默认" data-preset="默认" data-state="已取消" data-state-tone="cancelled" data-subtasks="0/0">
+<div class="absolute left-0 top-0 bottom-0 w-[3px] bg-transparent"></div>
+<div class="flex items-start justify-between gap-1 mb-1">
+<h2 class="font-medium text-[13px] text-slate-400 line-through truncate flex-1 tracking-tight">迁移旧版配置格式</h2>
+</div>
+<p class="text-[12px] text-slate-400 line-clamp-2 mb-1.5 leading-[18px]">把 .dshrc 迁移到 cordis.patch.yml 体系。</p>
+<div class="flex items-center gap-1.5 mb-1.5 text-[11px] text-slate-400">
+<span class="w-[7px] h-[7px] rounded-full border-[1.5px] border-slate-300"></span>
+<span class="truncate">已取消 · 1 周前</span>
+</div>
+<div class="font-code text-[11px] text-slate-300 truncate">tavlo-dsh-plugins · 默认</div>
+</div>
+
+<!-- 行内新建 -->
+<div class="hidden bg-white border border-slate-300 rounded-lg p-2.5 shadow-sm flex-col gap-2" id="inline-create">
+<input class="w-full bg-slate-50 border border-slate-200 px-2 py-1 rounded text-[12px] text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-slate-400" id="inline-title" placeholder="任务标题..." type="text"/>
+<textarea class="w-full bg-slate-50 border border-slate-200 px-2 py-1 rounded text-[12px] text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-slate-400 resize-none" id="inline-brief" placeholder="描述：这次要它做什么..." rows="2"></textarea>
+<div class="flex items-center justify-end gap-2">
+<button class="px-2 py-0.5 rounded text-[11px] text-slate-500 hover:text-slate-800" id="inline-cancel" type="button">取消</button>
+<button class="px-2.5 py-0.5 rounded bg-slate-900 text-white font-medium text-[11px] hover:bg-slate-800" id="inline-submit" type="button">创建</button>
+</div>
+</div>
+</div>
+<div class="p-2 flex-none border-t border-slate-200/60">
+<button class="w-full py-1 flex items-center justify-center gap-1 text-slate-500 hover:text-slate-800 hover:bg-white rounded-md text-[12px] font-medium transition-colors" id="add-todo">
+<span class="material-symbols-outlined text-[15px]">add</span><span>新建</span>
+</button>
+</div>
+</div>
+
+<!-- 进行中 -->
+<div class="flex-1 min-w-[280px] max-w-[380px] flex flex-col bg-[#eef2f7] border border-slate-200/70 rounded-xl overflow-hidden">
+<div class="px-3 py-2.5 flex items-center justify-between flex-none">
+<div class="flex items-center gap-1.5">
+<span class="font-semibold text-[13px] text-slate-800">进行中</span>
+<span class="min-w-[16px] h-4 px-1 rounded-full bg-blue-100 border border-blue-200 flex items-center justify-center font-code text-[10px] text-blue-700 font-semibold">2</span>
+</div>
+<button class="text-slate-400 hover:text-slate-700 p-0.5 rounded hover:bg-slate-200/50 transition-colors"><span class="material-symbols-outlined text-[16px]">more_horiz</span></button>
+</div>
+<div class="flex-1 overflow-y-auto px-2 pb-2 space-y-2" id="col-doing">
+
+<!-- 当前查看：只靠蓝色边框表达，不再加「当前查看 ▸」文字 -->
+<div class="task-card group relative bg-white border border-blue-400 ring-2 ring-blue-500/10 rounded-lg p-2.5 pl-3 shadow-sm transition-all cursor-pointer overflow-hidden"
+     data-task-id="t-pay" data-stage="doing" data-has-session="1" data-cancelled="0" data-current="1"
+     data-title="接入支付"
+     data-brief="把支付回调改成幂等，先补测试再动老逻辑。重试窗口要对齐。"
+     data-full-brief="把支付回调改成幂等，先补测试再动老逻辑。现有实现见 src/pay/callback.ts，注意重试窗口要跟网关配置对齐。"
+     data-workspace="acme-web" data-path="F:\work\acme\web" data-model="opus" data-preset="默认" data-state="待审批 · 修改 schema" data-state-tone="attention" data-subtasks="2/4">
+<div class="absolute left-0 top-0 bottom-0 w-[3px] bg-red-500"></div>
+<div class="batch-checkbox hidden absolute top-2 left-2 z-10"><input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/></div>
+<div class="flex items-start justify-between gap-1 mb-1">
+<div class="flex items-center gap-1.5 truncate flex-1">
+<h2 class="font-semibold text-[13px] text-slate-900 truncate tracking-tight">接入支付</h2>
+<span class="px-1 py-0.5 rounded bg-amber-50 border border-amber-200/80 text-amber-700 font-medium text-[10px] flex items-center gap-0.5 flex-none">
+<span class="material-symbols-outlined text-[12px] text-amber-600">warning</span><span>阻塞</span>
+</span>
+</div>
+<div class="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity flex-none">
+<button class="p-0.5 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-800" title="打开活跃会话"><span class="material-symbols-outlined text-[15px]">chat</span></button>
+</div>
+</div>
+<p class="text-[12px] text-slate-600 line-clamp-2 mb-1.5 leading-[18px]">把支付回调改成幂等，先补测试再动老逻辑。重试窗口要对齐。</p>
+<div class="flex items-center gap-1.5 mb-1.5 text-[11px] font-medium text-red-600">
+<span class="w-[7px] h-[7px] rounded-full bg-red-500"></span>
+<span class="truncate">待审批 · 修改 schema</span>
+</div>
+<div class="font-code text-[11px] text-slate-400 truncate">acme-web · opus · 2/4</div>
+</div>
+
+<div class="task-card group relative bg-white border border-border-subtle hover:border-slate-300 rounded-lg p-2.5 pl-3 shadow-sm hover:shadow transition-all cursor-pointer overflow-hidden"
+     data-task-id="t-test" data-stage="doing" data-has-session="1" data-cancelled="0"
+     data-title="补测试"
+     data-brief="补全 Webhook 端点超时单测，覆盖指数退避与数据库死锁重试分支。"
+     data-full-brief="补全 Webhook 端点超时单测，覆盖指数退避与数据库死锁重试分支；断言重试窗口与网关配置一致。"
+     data-workspace="acme-web" data-path="F:\work\acme\web" data-model="claude" data-preset="单测生成专家" data-state="待回答 · 确认网关超时重试" data-state-tone="attention" data-subtasks="3/5">
+<div class="absolute left-0 top-0 bottom-0 w-[3px] bg-red-500"></div>
+<div class="batch-checkbox hidden absolute top-2 left-2 z-10"><input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/></div>
+<div class="flex items-start justify-between gap-1 mb-1">
+<h2 class="font-semibold text-[13px] text-slate-900 truncate flex-1 tracking-tight">补测试</h2>
+<div class="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity flex-none">
+<button class="launch-btn p-0.5 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900" title="启动任务"><span class="material-symbols-outlined text-[15px]">play_arrow</span></button>
+</div>
+</div>
+<p class="text-[12px] text-slate-600 line-clamp-2 mb-1.5 leading-[18px]">补全 Webhook 端点超时单测，覆盖指数退避与数据库死锁重试分支。</p>
+<div class="flex items-center gap-1.5 mb-1.5 text-[11px] font-medium text-red-600">
+<span class="w-[7px] h-[7px] rounded-full bg-red-500"></span>
+<span class="truncate">待回答 · 确认网关超时重试</span>
+</div>
+<div class="font-code text-[11px] text-slate-400 truncate">acme-web · claude · 3/5</div>
+</div>
+</div>
+<div class="p-2 flex-none border-t border-slate-200/60">
+<button class="w-full py-1 flex items-center justify-center gap-1 text-slate-500 hover:text-slate-800 hover:bg-white rounded-md text-[12px] font-medium transition-colors">
+<span class="material-symbols-outlined text-[15px]">add</span><span>新建</span>
+</button>
+</div>
+</div>
+
+<!-- 已完成 -->
+<div class="flex-1 min-w-[280px] max-w-[380px] flex flex-col bg-[#eef2f7] border border-slate-200/70 rounded-xl overflow-hidden">
+<div class="px-3 py-2.5 flex items-center justify-between flex-none">
+<div class="flex items-center gap-1.5">
+<span class="font-semibold text-[13px] text-slate-800">已完成</span>
+<span class="min-w-[16px] h-4 px-1 rounded-full bg-white border border-slate-200 flex items-center justify-center font-code text-[10px] text-slate-500 font-medium">7</span>
+</div>
+<button class="text-slate-400 hover:text-slate-700 p-0.5 rounded hover:bg-slate-200/50 transition-colors"><span class="material-symbols-outlined text-[16px]">more_horiz</span></button>
+</div>
+<div class="flex-1 overflow-y-auto px-2 pb-2 space-y-2" id="col-done">
+<div class="task-card group relative bg-white/80 border border-slate-200 hover:border-slate-300 rounded-lg p-2.5 pl-3 shadow-sm hover:opacity-100 opacity-90 transition-all cursor-pointer overflow-hidden"
+     data-task-id="t-d1" data-stage="done" data-has-session="1" data-cancelled="0"
+     data-title="集成 Tavlo 主题 Token"
+     data-brief="已完成 CSS 变量注入，统一调色板与暗色模式阶梯。"
+     data-full-brief="已完成 CSS 变量注入，统一调色板与暗色模式阶梯，并替换全部硬编码色值。"
+     data-workspace="tavlo-dsh-plugins" data-path="F:\github\tavlo-dsh-plugins" data-model="flash" data-preset="默认" data-state="已完成" data-state-tone="done" data-subtasks="4/4">
+<div class="absolute left-0 top-0 bottom-0 w-[3px] bg-slate-300"></div>
+<div class="flex items-start justify-between gap-1 mb-1">
+<h2 class="font-medium text-[13px] text-slate-500 line-through truncate flex-1 tracking-tight">集成 Tavlo 主题 Token</h2>
+<span class="material-symbols-outlined text-[16px] text-emerald-500 flex-none">check_circle</span>
+</div>
+<p class="text-[12px] text-slate-400 line-clamp-2 mb-1.5 leading-[18px]">已完成 CSS 变量注入，统一调色板与暗色模式阶梯。</p>
+<div class="flex items-center gap-1.5 mb-1.5 text-[11px] text-slate-400">
+<span class="w-[7px] h-[7px] rounded-full bg-slate-300"></span>
+<span class="truncate">已完成 · 3 天前</span>
+</div>
+<div class="font-code text-[11px] text-slate-400 truncate">tavlo-dsh-plugins · flash · 4/4</div>
+</div>
+
+<div class="task-card group relative bg-white/80 border border-slate-200 hover:border-slate-300 rounded-lg p-2.5 pl-3 shadow-sm hover:opacity-100 opacity-90 transition-all cursor-pointer overflow-hidden"
+     data-task-id="t-d2" data-stage="done" data-has-session="1" data-cancelled="0"
+     data-title="修复会话流内存泄露"
+     data-brief="卸载 listener 并在 window unload 时终止 worker。"
+     data-full-brief="卸载 listener 并在 window unload 时终止 worker；补一条 30 分钟浸泡测试。"
+     data-workspace="CLI-Manager" data-path="F:\work\cli-manager" data-model="deepseek" data-preset="默认" data-state="已完成" data-state-tone="done" data-subtasks="2/2">
+<div class="absolute left-0 top-0 bottom-0 w-[3px] bg-slate-300"></div>
+<div class="flex items-start justify-between gap-1 mb-1">
+<h2 class="font-medium text-[13px] text-slate-500 line-through truncate flex-1 tracking-tight">修复会话流内存泄露</h2>
+<span class="material-symbols-outlined text-[16px] text-emerald-500 flex-none">check_circle</span>
+</div>
+<p class="text-[12px] text-slate-400 line-clamp-2 mb-1.5 leading-[18px]">卸载 listener 并在 window unload 时终止 worker。</p>
+<div class="flex items-center gap-1.5 mb-1.5 text-[11px] text-slate-400">
+<span class="w-[7px] h-[7px] rounded-full bg-slate-300"></span>
+<span class="truncate">已完成 · 5 天前</span>
+</div>
+<div class="font-code text-[11px] text-slate-400 truncate">CLI-Manager · deepseek · 2/2</div>
+</div>
+</div>
+<div class="p-2 flex-none border-t border-slate-200/60">
+<button class="w-full py-1 text-center text-slate-500 hover:text-slate-800 text-[11px] font-medium rounded transition-colors">查看全部 7 条</button>
+</div>
+</div>
+
+</div>
+</div>
+
+<!-- ============ 详情：浮层，不挤压看板 ============ -->
+<aside class="absolute top-0 right-0 bottom-0 w-[380px] bg-white border-l border-border-subtle shadow-[-8px_0_24px_rgba(15,23,42,0.08)] flex flex-col z-30 translate-x-full transition-transform duration-200" id="detail">
+<div class="h-11 px-4 border-b border-border-subtle flex items-center justify-between flex-none bg-slate-50/60">
+<div class="flex items-center gap-2 text-slate-700">
+<span class="material-symbols-outlined text-[16px] text-slate-500">edit_note</span>
+<span class="font-semibold text-[12px] uppercase tracking-wider text-slate-600">任务详情</span>
+</div>
+<button class="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors" id="detail-close"><span class="material-symbols-outlined text-[17px]">close</span></button>
+</div>
+<div class="flex-1 overflow-y-auto p-4 space-y-4">
+
+<div>
+<input class="w-full bg-transparent font-bold text-[17px] text-slate-900 border-b border-transparent hover:border-slate-200 focus:border-blue-500 focus:outline-none px-0.5 py-0.5 rounded transition-colors" type="text" value="接入支付" id="d-title"/>
+</div>
+
+<!-- 状态行：取消移到危险区，这里只留 stage + 阻塞 -->
+<div class="flex items-center justify-between gap-2 p-2 rounded-lg bg-slate-50 border border-slate-200/70">
+<div class="flex items-center gap-1.5">
+<span class="text-[11px] font-medium text-slate-500">状态</span>
+<div class="relative">
+<button class="flex items-center gap-1 bg-white border border-slate-200 text-slate-800 text-[12px] font-medium py-1 px-2 rounded hover:border-slate-300 min-w-[88px]" data-menu-trigger="stage" type="button">
+<span data-menu-label="stage">进行中</span>
+<span class="material-symbols-outlined text-[14px] text-slate-400 ml-auto">arrow_drop_down</span>
+</button>
+<div class="hidden absolute left-0 top-full mt-1 w-[120px] p-1 rounded-lg bg-white border border-slate-200 shadow-lg z-50" data-menu="stage">
+<button class="w-full text-left px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700" data-value="todo">待开始</button>
+<button class="w-full text-left px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700" data-value="doing">进行中</button>
+<button class="w-full text-left px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700" data-value="done">已完成</button>
+</div>
+</div>
+</div>
+<button class="px-2 py-1 rounded border border-amber-200 bg-amber-50 text-amber-700 text-[11px] font-medium flex items-center gap-1 hover:bg-amber-100 transition-colors" id="block-btn">
+<span class="material-symbols-outlined text-[13px] text-amber-600">warning</span><span>标记阻塞</span>
+</button>
+</div>
+
+<!-- 阻塞原因（点「标记阻塞」才出现） -->
+<div class="hidden p-2.5 rounded-lg bg-amber-50/60 border border-amber-200 space-y-1.5" id="block-form">
+<label class="text-[11px] font-medium text-amber-800">阻塞原因（会显示在卡片和告警条上）</label>
+<textarea class="w-full bg-white border border-amber-200 p-2 rounded text-[12px] text-slate-800 focus:outline-none focus:border-amber-400 resize-none" rows="2" placeholder="例如：等网关方确认重试窗口配置"></textarea>
+<div class="flex items-center justify-end gap-2">
+<button class="px-2 py-0.5 rounded text-[11px] text-slate-500 hover:text-slate-800" id="block-cancel">取消</button>
+<button class="px-2.5 py-0.5 rounded bg-amber-600 text-white font-medium text-[11px] hover:bg-amber-700" id="block-confirm">确认阻塞</button>
+</div>
+</div>
+
+<!-- 活跃会话：仅有会话时显示 -->
+<div class="p-3 rounded-lg bg-slate-50 border border-slate-200 flex-col gap-2.5" id="session-block">
+<div class="flex items-center justify-between">
+<span class="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">活跃会话</span>
+<span class="font-code text-[11px] text-slate-400">sess_9921b</span>
+</div>
+<div class="flex items-center gap-2 py-1.5 px-2.5 rounded bg-red-50 border border-red-100 text-red-700 text-[12px]">
+<span class="w-2 h-2 rounded-full bg-red-500"></span>
+<span class="font-medium">待审批 · 5 分钟前</span>
+</div>
+<div class="flex items-center gap-2 pt-0.5">
+<button class="flex-1 py-1.5 px-3 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-[12px] font-medium flex items-center justify-center gap-1.5">
+<span class="material-symbols-outlined text-[15px]">chat</span><span>打开对话</span>
+</button>
+<button class="py-1.5 px-3 rounded-md bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-[12px] font-medium">换一个对话</button>
+</div>
+</div>
+
+<!-- 无会话时的启动入口（原型里点「架构重构 RFC 初稿」可看到） -->
+<div class="hidden p-3 rounded-lg bg-slate-50 border border-slate-200 flex-col gap-2" id="no-session-block">
+<div class="flex items-center justify-between">
+<span class="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">活跃会话</span>
+</div>
+<p class="text-[12px] text-slate-500">还没有对话。开始后会按下面的工作区、模型和预设新建一个。</p>
+<button class="w-full py-1.5 px-3 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-[12px] font-medium flex items-center justify-center gap-1.5" id="detail-launch">
+<span class="material-symbols-outlined text-[15px]">play_arrow</span><span>开始任务</span>
+</button>
+</div>
+
+<!-- 执行说明 -->
+<div class="space-y-1.5">
+<div class="flex items-center justify-between">
+<label class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">执行说明</label>
+<span class="text-[11px] text-slate-400">会作为首条消息发出</span>
+</div>
+<textarea class="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-lg text-[12px] text-slate-800 leading-relaxed focus:outline-none focus:border-slate-400 focus:bg-white resize-none transition-colors" rows="4" id="d-brief">把支付回调改成幂等，先补测试再动老逻辑。现有实现见 src/pay/callback.ts，注意重试窗口要跟网关配置对齐。</textarea>
+</div>
+
+<!-- 工作区 -->
+<div class="space-y-1.5">
+<div class="flex items-center justify-between">
+<label class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">工作区</label>
+<button class="text-blue-600 hover:underline text-[11px] font-medium">更换目录</button>
+</div>
+<div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 flex flex-col gap-0.5">
+<div class="flex items-center gap-1.5 text-slate-800 text-[12px]">
+<span class="material-symbols-outlined text-[15px] text-blue-500">folder_open</span>
+<span class="font-semibold" id="d-ws-name">acme-web</span>
+</div>
+<div class="font-code text-[11px] text-slate-500 break-all select-text pl-5" id="d-ws-path">F:\work\acme\web</div>
+</div>
+</div>
+
+<!-- 模型 / 预设 -->
+<div class="grid grid-cols-2 gap-2.5">
+<div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 space-y-1">
+<span class="font-code text-[10px] text-slate-400 uppercase">模型</span>
+<div class="text-[12px] text-slate-800 font-semibold truncate" id="d-model">claude-opus-4</div>
+<div class="font-code text-[10px] text-slate-400">anthropic</div>
+</div>
+<div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 space-y-1">
+<span class="font-code text-[10px] text-slate-400 uppercase">预设</span>
+<div class="text-[12px] text-slate-800 font-semibold truncate" id="d-preset">默认</div>
+<div class="font-code text-[10px] text-slate-400">preset-standard</div>
+</div>
+</div>
+
+<!-- 子任务 -->
+<div class="space-y-2">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-1.5">
+<span class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">子任务</span>
+<span class="px-1.5 py-0.5 rounded bg-slate-100 font-code text-[11px] text-slate-700 font-semibold">2/4</span>
+</div>
+<button class="text-blue-600 hover:underline text-[11px] font-medium flex items-center gap-0.5">
+<span class="material-symbols-outlined text-[13px]">add</span><span>添加</span>
+</button>
+</div>
+<div class="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200/60">
+<div class="w-1/2 h-full bg-blue-600 rounded-full"></div>
+</div>
+<div class="space-y-0.5 pt-0.5">
+<label class="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50 cursor-pointer text-[12px]">
+<input checked="" class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+<span class="line-through text-slate-400 flex-1">梳理回调签名验签</span>
+<button class="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-blue-600" title="打开子任务"><span class="material-symbols-outlined text-[14px]">open_in_new</span></button>
+</label>
+<label class="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50 cursor-pointer text-[12px]">
+<input checked="" class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+<span class="line-through text-slate-400">补充重试幂等单测</span>
+</label>
+<label class="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50 cursor-pointer text-[12px]">
+<input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+<span class="text-slate-800">迁移旧表 Schema</span>
+</label>
+<label class="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50 cursor-pointer text-[12px]">
+<input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+<span class="text-slate-800">联调沙箱环境</span>
+</label>
+</div>
+</div>
+
+<!-- 历史对话 -->
+<details class="group rounded-lg bg-slate-50 border border-slate-200 p-2.5">
+<summary class="flex items-center justify-between cursor-pointer list-none text-slate-600 font-medium text-[12px]">
+<span class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[15px] text-slate-400">history</span><span>历史对话 (1)</span>
+</span>
+<span class="material-symbols-outlined text-[16px] text-slate-400 group-open:rotate-180 transition-transform">expand_more</span>
+</summary>
+<div class="pt-2 space-y-1">
+<div class="flex items-center justify-between text-[11px] py-1 px-1.5 rounded hover:bg-white">
+<span class="font-code text-slate-700">#sess_9918 (前置调研)</span>
+<span class="font-code text-slate-400">2 天前</span>
+</div>
+</div>
+</details>
+
+<!-- 危险区 -->
+<div class="pt-1 pb-2">
+<button class="w-full py-1.5 rounded-md border border-slate-200 text-slate-500 hover:text-red-600 hover:border-red-200 hover:bg-red-50/50 text-[12px] font-medium transition-colors" id="cancel-task">
+取消任务
+</button>
+<p class="text-[11px] text-slate-400 mt-1.5 text-center">取消后任务从看板隐藏，可在筛选中找回</p>
+</div>
+
+</div>
+</aside>
+
+</div>
+</main>
+
+<!-- ============ 悬浮信息卡 ============ -->
+<div class="fixed w-[320px] p-3 rounded-xl bg-white border border-slate-200 shadow-xl z-50 pointer-events-none hidden flex-col gap-2 opacity-0 transition-opacity duration-150" id="hover-card">
+<div>
+<h3 class="text-[13px] font-bold text-slate-900" id="hv-title"></h3>
+<p class="text-[12px] text-slate-500 mt-1 leading-relaxed line-clamp-6" id="hv-brief"></p>
+</div>
+<div class="h-px bg-slate-100"></div>
+<div class="space-y-1.5 text-[11px]">
+<div class="flex items-start justify-between gap-3">
+<span class="text-slate-400 font-code flex-none">工作区</span>
+<div class="text-right min-w-0">
+<div class="font-semibold text-slate-800 truncate" id="hv-ws"></div>
+<div class="font-code text-slate-400 truncate" id="hv-path"></div>
+</div>
+</div>
+<div class="flex items-center justify-between gap-3">
+<span class="text-slate-400 font-code flex-none">模型 / 预设</span>
+<span class="font-code text-slate-700 truncate" id="hv-model"></span>
+</div>
+<div class="flex items-center justify-between gap-3">
+<span class="text-slate-400 font-code flex-none">状态</span>
+<span class="font-medium truncate" id="hv-state"></span>
+</div>
+<div class="flex items-center justify-between gap-3">
+<span class="text-slate-400 font-code flex-none">子任务</span>
+<span class="font-code text-slate-700" id="hv-subtasks"></span>
+</div>
+</div>
+</div>
+
+<!-- ============ 启动面板 ============ -->
+<div class="hidden fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" id="launch-modal">
+<div class="w-full max-w-[520px] bg-white border border-slate-200 rounded-xl shadow-2xl p-5 flex flex-col gap-4">
+<div class="flex items-center justify-between pb-2 border-b border-slate-100">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[20px] text-blue-600">rocket_launch</span>
+<h2 class="font-bold text-[15px] text-slate-900" id="m-title">启动任务</h2>
+</div>
+<button class="text-slate-400 hover:text-slate-700 p-1 rounded hover:bg-slate-100" id="m-close"><span class="material-symbols-outlined text-[18px]">close</span></button>
+</div>
+
+<!-- 已有空闲会话时的二选一 -->
+<div class="hidden rounded-lg border border-blue-200 bg-blue-50/60 p-2.5 space-y-2" id="m-reuse">
+<p class="text-[12px] text-slate-700">这个任务已经有一个空闲对话。</p>
+<div class="flex items-center gap-2">
+<button class="px-2.5 py-1 rounded-md bg-blue-600 text-white text-[12px] font-medium hover:bg-blue-700">接着用现有对话</button>
+<button class="px-2.5 py-1 rounded-md bg-white border border-slate-200 text-slate-700 text-[12px] font-medium hover:bg-slate-50">新开一个对话</button>
+</div>
+</div>
+
+<div class="grid grid-cols-3 gap-2.5" id="m-fields">
+<div class="space-y-1 relative">
+<label class="font-code text-[10px] text-slate-400 uppercase font-semibold">工作区</label>
+<button class="w-full flex items-center gap-1 bg-slate-50 border border-slate-200 px-2 py-1.5 rounded-md text-[12px] text-slate-800 hover:border-slate-300" data-menu-trigger="m-ws" type="button">
+<span class="truncate flex-1 text-left" data-menu-label="m-ws">acme-web</span>
+<span class="material-symbols-outlined text-[14px] text-slate-400 flex-none">arrow_drop_down</span>
+</button>
+<div class="hidden absolute left-0 top-full mt-1 w-[180px] p-1 rounded-lg bg-white border border-slate-200 shadow-lg z-50" data-menu="m-ws">
+<button class="w-full text-left px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700" data-value="acme-web">acme-web</button>
+<button class="w-full text-left px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700" data-value="tavlo-dsh-plugins">tavlo-dsh-plugins</button>
+<button class="w-full text-left px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700" data-value="CLI-Manager">CLI-Manager</button>
+</div>
+</div>
+<div class="space-y-1 relative">
+<label class="font-code text-[10px] text-slate-400 uppercase font-semibold">模型</label>
+<button class="w-full flex items-center gap-1 bg-slate-50 border border-slate-200 px-2 py-1.5 rounded-md text-[12px] text-slate-800 hover:border-slate-300" data-menu-trigger="m-model" type="button">
+<span class="truncate flex-1 text-left" data-menu-label="m-model">claude-opus-4</span>
+<span class="material-symbols-outlined text-[14px] text-slate-400 flex-none">arrow_drop_down</span>
+</button>
+<div class="hidden absolute left-0 top-full mt-1 w-[200px] p-1 rounded-lg bg-white border border-slate-200 shadow-lg z-50" data-menu="m-model">
+<button class="w-full text-left px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700" data-value="opus">claude-opus-4</button>
+<button class="w-full text-left px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700" data-value="sonnet">claude-sonnet-4</button>
+<button class="w-full text-left px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700" data-value="deepseek">deepseek-v4.1-flash</button>
+</div>
+</div>
+<div class="space-y-1 relative">
+<label class="font-code text-[10px] text-slate-400 uppercase font-semibold">预设</label>
+<button class="w-full flex items-center gap-1 bg-slate-50 border border-slate-200 px-2 py-1.5 rounded-md text-[12px] text-slate-800 hover:border-slate-300" data-menu-trigger="m-preset" type="button">
+<span class="truncate flex-1 text-left" data-menu-label="m-preset">默认</span>
+<span class="material-symbols-outlined text-[14px] text-slate-400 flex-none">arrow_drop_down</span>
+</button>
+<div class="hidden absolute right-0 top-full mt-1 w-[180px] p-1 rounded-lg bg-white border border-slate-200 shadow-lg z-50" data-menu="m-preset">
+<button class="w-full text-left px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700" data-value="default">默认</button>
+<button class="w-full text-left px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700" data-value="test">单测生成专家</button>
+</div>
+</div>
+</div>
+
+<div class="space-y-1.5" id="m-prompt-wrap">
+<div class="flex items-center justify-between">
+<label class="text-[11px] font-semibold text-slate-600">首条消息</label>
+<span class="font-code text-[10px] text-slate-400">Ctrl / ⌘ + Enter 启动</span>
+</div>
+<textarea class="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-lg text-[12px] text-slate-800 leading-relaxed focus:outline-none focus:border-slate-400 focus:bg-white resize-none" rows="4" id="m-prompt">补测试
+
+补全 Webhook 端点超时单测，覆盖指数退避与数据库死锁重试分支。</textarea>
+</div>
+
+<div class="flex items-center justify-between pt-2 border-t border-slate-100">
+<span class="text-[11px] text-slate-400">模型会选择为此后的默认模型</span>
+<div class="flex items-center gap-2">
+<button class="px-3 py-1.5 rounded-md text-[12px] font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100" id="m-cancel" type="button">取消</button>
+<button class="px-4 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium text-[12px] flex items-center gap-1.5 shadow-sm transition-colors" id="m-confirm" type="button">
+<span class="material-symbols-outlined text-[15px]">play_arrow</span><span>开始</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+
+<script>
+  (function () {
+    const $ = (s, r = document) => r.querySelector(s);
+    const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+
+    /* ---------- 通用菜单 ---------- */
+    const closeMenus = (except) => {
+      $$('[data-menu]').forEach(m => { if (m !== except) m.classList.add('hidden'); });
+    };
+    $$('[data-menu-trigger]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const menu = $(`[data-menu="${btn.dataset.menuTrigger}"]`);
+        const willOpen = menu.classList.contains('hidden');
+        closeMenus();
+        menu.classList.toggle('hidden', !willOpen);
+      });
+    });
+    $$('[data-menu]').forEach(menu => {
+      const key = menu.dataset.menu;
+      menu.querySelectorAll('[data-value]').forEach(opt => {
+        opt.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const label = $(`[data-menu-label="${key}"]`);
+          if (label) label.textContent = opt.textContent.trim();
+          menu.classList.add('hidden');
+        });
+      });
+    });
+    document.addEventListener('click', () => closeMenus());
+
+    /* ---------- 告警条 ---------- */
+    const alertBar = $('#alert-bar'), alertTray = $('#alert-tray');
+    $('#alert-expand').addEventListener('click', () => {
+      alertTray.classList.toggle('hidden');
+      alertTray.classList.toggle('flex');
+    });
+    $('#alert-dismiss').addEventListener('click', () => {
+      alertBar.classList.add('hidden');
+      alertTray.classList.add('hidden');
+      alertTray.classList.remove('flex');
+    });
+
+    /* ---------- 多选 ---------- */
+    const multiBtn = $('#multi-toggle'), batchBar = $('#batch-bar');
+    let multi = false;
+    const setMulti = (on) => {
+      multi = on;
+      batchBar.classList.toggle('hidden', !on);
+      batchBar.classList.toggle('flex', on);
+      $$('.batch-checkbox').forEach(b => b.classList.toggle('hidden', !on));
+      $$('.task-card').forEach(c => c.classList.toggle('pl-7', on));
+    };
+    multiBtn.addEventListener('click', () => setMulti(!multi));
+    $('#batch-exit').addEventListener('click', () => setMulti(false));
+
+    /* ---------- 筛选：显示已取消 ---------- */
+    $('#show-cancelled').addEventListener('change', (e) => {
+      $$('[data-cancelled="1"]').forEach(c => c.classList.toggle('hidden', !e.target.checked));
+    });
+
+    /* ---------- 行内新建 ---------- */
+    const box = $('#inline-create');
+    $('#add-todo').addEventListener('click', () => {
+      box.classList.remove('hidden');
+      box.classList.add('flex');
+      $('#inline-title').focus();
+    });
+    const closeInline = () => { box.classList.add('hidden'); box.classList.remove('flex'); };
+    $('#inline-cancel').addEventListener('click', closeInline);
+    $('#inline-submit').addEventListener('click', closeInline);
+
+    /* ---------- 详情浮层 ---------- */
+    const detail = $('#detail');
+    const openDetail = () => {
+      detail.classList.remove('translate-x-full');
+    };
+    const closeDetail = () => {
+      detail.classList.add('translate-x-full');
+    };
+    $('#detail-close').addEventListener('click', closeDetail);
+
+    $$('.task-card').forEach(card => {
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('button') || e.target.closest('input')) return;
+        const d = card.dataset;
+        $('#d-title').value = d.title;
+        $('#d-brief').value = d.fullBrief;
+        $('#d-ws-name').textContent = d.workspace;
+        $('#d-ws-path').textContent = d.path;
+        $('#d-model').textContent = d.model;
+        $('#d-preset').textContent = d.preset;
+        const has = d.hasSession === '1';
+        $('#session-block').classList.toggle('hidden', !has);
+        $('#no-session-block').classList.toggle('hidden', has);
+        openDetail();
+      });
+    });
+
+    /* ---------- 阻塞原因 ---------- */
+    const blockForm = $('#block-form');
+    $('#block-btn').addEventListener('click', () => {
+      blockForm.classList.toggle('hidden');
+    });
+    $('#block-cancel').addEventListener('click', () => blockForm.classList.add('hidden'));
+
+    /* ---------- 启动面板 ---------- */
+    const modal = $('#launch-modal');
+    const openModal = (card) => {
+      const d = card ? card.dataset : null;
+      $('#m-title').textContent = '启动任务：' + (d ? d.title : '');
+      if (d) {
+        $('#m-prompt').value = d.title + '\n\n' + d.fullBrief;
+        $('[data-menu-label="m-ws"]').textContent = d.workspace;
+        $('[data-menu-label="m-model"]').textContent = d.model;
+        $('[data-menu-label="m-preset"]').textContent = d.preset;
+        $('#m-reuse').classList.toggle('hidden', d.hasSession !== '1');
+      }
+      modal.classList.remove('hidden');
+    };
+    const closeModal = () => modal.classList.add('hidden');
+    $$('.launch-btn').forEach(b => b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openModal(b.closest('.task-card'));
+    }));
+    $('#detail-launch').addEventListener('click', () => {
+      openModal($('.task-card[data-task-id="t-pay"]'));
+    });
+    $('#m-close').addEventListener('click', closeModal);
+    $('#m-cancel').addEventListener('click', closeModal);
+    $('#m-confirm').addEventListener('click', () => {
+      const btn = $('#m-confirm');
+      const old = btn.innerHTML;
+      btn.innerHTML = '<span class="material-symbols-outlined text-[15px] animate-spin">refresh</span><span>启动中…</span>';
+      setTimeout(() => { closeModal(); btn.innerHTML = old; }, 700);
+    });
+    $('#m-prompt').addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') $('#m-confirm').click();
+    });
+
+    /* ---------- 搜索 ---------- */
+    $('#search-input').addEventListener('input', (e) => {
+      const q = e.target.value.toLowerCase().trim();
+      $$('.task-card').forEach(card => {
+        const hit = !q || card.textContent.toLowerCase().includes(q) || (card.dataset.brief || '').toLowerCase().includes(q);
+        card.classList.toggle('hidden', !hit || (card.dataset.cancelled === '1' && !$('#show-cancelled').checked));
+      });
+    });
+
+    /* ---------- 悬浮信息卡（500ms，锚定卡片） ---------- */
+    const hv = $('#hover-card');
+    let hvTimer = null;
+    $$('.task-card').forEach(card => {
+      card.addEventListener('mouseenter', () => {
+        if (multi) return;
+        const d = card.dataset;
+        hvTimer = setTimeout(() => {
+          $('#hv-title').textContent = d.title;
+          $('#hv-brief').textContent = d.fullBrief;
+          $('#hv-ws').textContent = d.workspace;
+          $('#hv-path').textContent = d.path;
+          $('#hv-model').textContent = d.model + ' · ' + d.preset;
+          $('#hv-state').textContent = d.state;
+          const tone = d.stateTone;
+          $('#hv-state').className = 'font-medium truncate ' + (
+            tone === 'attention' ? 'text-red-600' : tone === 'done' ? 'text-slate-400' : 'text-slate-700'
+          );
+          $('#hv-subtasks').textContent = d.subtasks === '0/0' ? '—' : d.subtasks;
+
+          const r = card.getBoundingClientRect();
+          hv.classList.remove('hidden');
+          hv.classList.add('flex');
+          const w = 320, gap = 10;
+          let left = r.right + gap;
+          if (left + w > window.innerWidth - 8) left = Math.max(8, r.left - w - gap);
+          let top = r.top;
+          const h = hv.offsetHeight;
+          if (top + h > window.innerHeight - 8) top = Math.max(8, window.innerHeight - h - 8);
+          hv.style.left = left + 'px';
+          hv.style.top = top + 'px';
+          requestAnimationFrame(() => hv.classList.remove('opacity-0'));
+        }, 500);
+      });
+      card.addEventListener('mouseleave', () => {
+        clearTimeout(hvTimer);
+        hv.classList.add('opacity-0');
+        setTimeout(() => { if (hv.classList.contains('opacity-0')) { hv.classList.add('hidden'); hv.classList.remove('flex'); } }, 150);
+      });
+    });
+  })();
+</script>
+</body></html>

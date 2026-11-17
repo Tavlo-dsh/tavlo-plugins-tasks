@@ -1,0 +1,1512 @@
+{
+  "repository": "https://github.com/kevintngo/looseleaf",
+  "commit": "4bdb647940e2fefb3cebb394f3bad25c766a27d2",
+  "auditedAt": "2026-11-17",
+  "roots": [
+    "src/components/ui/button.tsx",
+    "src/components/ui/badge.tsx",
+    "src/components/ui/card.tsx"
+  ],
+  "copiedRuntimeFiles": [
+    {
+      "upstream": "src/lib/ink/textures-paper.generated.ts",
+      "local": "client.js",
+      "symbols": [
+        "PAPER_SLIP.uri",
+        "PAPER_FIBRE.uri"
+      ],
+      "modifications": "Extract two unmodified PNG data URIs; keep original CSS tile sizes. No texture generator, loader, font or runtime imports.",
+      "assets": [
+        {
+          "symbol": "PAPER_SLIP",
+          "bytes": 20322,
+          "sha256": "d482ca23ac111d544bb6b6fb7803cee88e25d7c72d93d94482991d6dc96f1694",
+          "cssSize": [
+            128,
+            128
+          ]
+        },
+        {
+          "symbol": "PAPER_FIBRE",
+          "bytes": 3525,
+          "sha256": "62e0029469c1f1523a6682d0a56e8e44a02de9ba00bdb197882806185958bcd9",
+          "cssSize": [
+            240,
+            240
+          ]
+        }
+      ]
+    },
+    {
+      "upstream": "src/lib/ink/rng.ts",
+      "local": "client.js",
+      "symbols": [
+        "avalanche",
+        "hashSeed"
+      ],
+      "modifications": "Strip TS; rename hashSeed to paperSeed; accept only stable string task ID + role. Inline AVALANCHE fallback. No RNG/cache/observer imports."
+    }
+  ],
+  "copiedNotices": [
+    {
+      "upstream": "LICENSE",
+      "local": "licenses/looseleaf-MIT.txt"
+    }
+  ],
+  "plannedPort": [],
+  "files": [
+    {
+      "path": "LICENSE",
+      "bytes": 1079,
+      "sha256": "5a7c48962dbd30f330cba18a0f39c28b1e7be566f8d7786f3db148b326b44b38",
+      "gitBlob": "bfbeb792b386b698659890e178a796c0c5522a87"
+    },
+    {
+      "path": "notes/registry.md",
+      "bytes": 34266,
+      "sha256": "041e7c4c2cd0efa7ea69b96e0119f990933d0cc4a4220ce110448f1ee18d33f3",
+      "gitBlob": "6aa16a2786f8e17df6634caa948f6564065314db"
+    },
+    {
+      "path": "package.json",
+      "bytes": 3224,
+      "sha256": "f207019c33ab8c488c0261ec0a70ee319074c886535fc346efb99c38e9d283ae",
+      "gitBlob": "6df4997f0c76b8998e8a4ed2c09b3fd9e00462d8"
+    },
+    {
+      "path": "public/r/badge.json",
+      "bytes": 10562,
+      "sha256": "9d5258649092b13b78ff953584c6f4e4c033c17d9643ebc9ebbe29a92c220264",
+      "gitBlob": "3a773709237a880b365188f9087544e6f3024a76"
+    },
+    {
+      "path": "public/r/button.json",
+      "bytes": 12137,
+      "sha256": "72950aa1f12c54bd365c14901c11a049d9bb21e88777d50753cdd1ed154d802b",
+      "gitBlob": "9a209f26c68801b4e3acd1364e533c7b8b965e47"
+    },
+    {
+      "path": "public/r/card.json",
+      "bytes": 7320,
+      "sha256": "69a6dd46c49715a68c16cf12775847b887c91ce105d882f0198eddc5df24fdd3",
+      "gitBlob": "49267a051b2a78f8a13d30199eedfbdd86be694d"
+    },
+    {
+      "path": "public/r/font-ibm-plex-mono.json",
+      "bytes": 747,
+      "sha256": "01378ef7551f4f3b52924456af12a75efd8fd4c0a2679e1d33eb69ee7974fd36",
+      "gitBlob": "55633c5387ef4c4455ed7114b4e6195791b04e78"
+    },
+    {
+      "path": "public/r/font-kevin-sans.json",
+      "bytes": 750,
+      "sha256": "5836bdfa03e0973f80fa852a78d19901ad95da75e365009e88996f8a0583935a",
+      "gitBlob": "79a5d8aeb56c07878e9335f1d717f1cfef796b58"
+    },
+    {
+      "path": "public/r/ink-grain-textures.json",
+      "bytes": 93805,
+      "sha256": "1962c75eb605d1440a8cf6fe8160bcbc41ef985bddbc26fdf90b2c8c920908e4",
+      "gitBlob": "0b08eef679819f5a2efbdc5e24b9e4edd09eab04"
+    },
+    {
+      "path": "public/r/ink-paper-textures.json",
+      "bytes": 180858,
+      "sha256": "dfcdc0bda778998254f958371363d23ef04f82f1c35562b9291b8912908030de",
+      "gitBlob": "25bfaa33647d2e2e8ac819c3a252bf23968709cd"
+    },
+    {
+      "path": "public/r/ink-paper.json",
+      "bytes": 74629,
+      "sha256": "e02b0e62180b458aaf34537e2e478ad4fadd3bbc0fa219e19a962e816f07ca4c",
+      "gitBlob": "c3a7d1670b317713241408fe768e84e7750631c8"
+    },
+    {
+      "path": "public/r/ink.json",
+      "bytes": 148095,
+      "sha256": "fce0f13afcfb9dadf77e804be17a914e06a275664f6346bdf4b7df4b531d70cd",
+      "gitBlob": "d8ddb578afa2614d34201f726c5f2219b64a94f6"
+    },
+    {
+      "path": "public/r/looseleaf-theme.json",
+      "bytes": 49920,
+      "sha256": "534fee1103adb9ba3afe9a3a0bb001ef2c66aa5a2471027d643b81ddd9b13b2c",
+      "gitBlob": "113eea77083ee4a45c470c7d5ea9eef4e883736b"
+    },
+    {
+      "path": "public/r/paper.json",
+      "bytes": 17479,
+      "sha256": "e97d8fb8fd75aa485572566258ffe677280ed46ced4a2475ca13f7933750ae8a",
+      "gitBlob": "df48210940512f70b9e93861cdf0ac93ebd328e5"
+    },
+    {
+      "path": "public/r/tape.json",
+      "bytes": 3072,
+      "sha256": "faf27e64266901ac4fc4a24b8fe7e3828b4f63bcbbbaa2dd7c6485055896966d",
+      "gitBlob": "0d6056873525a6b8e5fff4a55273acde86f5de3f"
+    },
+    {
+      "path": "public/r/utils.json",
+      "bytes": 658,
+      "sha256": "5bd767aa7b2b56c079d95edc44af031f760a91c5aad57da9a8820750328af0a3",
+      "gitBlob": "a1b6ad912c4f71a226fdc69cd551d08fe5d49e9e"
+    },
+    {
+      "path": "README.md",
+      "bytes": 2953,
+      "sha256": "bfd4070afefa027f6c1431dc58cdb608a0d1c7bfa5f4185ead37887d89bd3868",
+      "gitBlob": "859ed5cfc129752ff838c7906529bc46aa834fe2"
+    },
+    {
+      "path": "src/components/ui/badge.tsx",
+      "bytes": 3749,
+      "sha256": "6b4651bd04a6867f04249fca47e4ae8bb17f0384dd1c815d0391b44b5bb7ebc5",
+      "gitBlob": "6dcff4f6d9113033f21509ccba190c498eeb814b"
+    },
+    {
+      "path": "src/components/ui/button.tsx",
+      "bytes": 3974,
+      "sha256": "5a0b9d9513303de5f3ba8433b03cac19ede4c8258fde4e84efe4e76b59d610a8",
+      "gitBlob": "33c5af8272d4873acb1ebe1b79b383733da7bb22"
+    },
+    {
+      "path": "src/components/ui/card.tsx",
+      "bytes": 3283,
+      "sha256": "e6dae2ac83f4a86e87c3938f0580d0dfe5b492784f3f76c3945a4198507254cc",
+      "gitBlob": "aedbbb7217dac78a3d90df00a67d6ef458fb48e9"
+    },
+    {
+      "path": "src/components/ui/paper.tsx",
+      "bytes": 7749,
+      "sha256": "8dc53f8287a143a02733da6a3173621bb307ca43d47c86718d077576df1af870",
+      "gitBlob": "8f96e28003e8d551e3a24ca6109f6a4a04e9f2d5"
+    },
+    {
+      "path": "src/components/ui/tape.tsx",
+      "bytes": 1520,
+      "sha256": "723d66f25165f71040be0e1de150ae4dc8357870b5fd2c6468e62d3e7b160da6",
+      "gitBlob": "26f786f2b028ee79e4af0d6dd195b6cf21a8386b"
+    },
+    {
+      "path": "src/lib/ink/builder.ts",
+      "bytes": 15474,
+      "sha256": "8482dc5cb704507f3814a6ca8faf7c551c9fd57a1b6f97b4d8ba874dbff5e65f",
+      "gitBlob": "f4e9d4ad9107c2d84441dc85d6fa5c9b4d52024c"
+    },
+    {
+      "path": "src/lib/ink/fills.ts",
+      "bytes": 12917,
+      "sha256": "336ed19fd13da1593e5bcf7b3879596e1286c5ff0b5050669befcf562c3bcb3b",
+      "gitBlob": "222e54fba64d4e52e78664ad8263f7d130b88f41"
+    },
+    {
+      "path": "src/lib/ink/geom.ts",
+      "bytes": 15650,
+      "sha256": "890f7d92562d52aa4426383a10461f0ccdaaf66267f32c7d66a64dbf903258d3",
+      "gitBlob": "be75c657a509de16eedb2aae6319929fc592ed0d"
+    },
+    {
+      "path": "src/lib/ink/index.ts",
+      "bytes": 821,
+      "sha256": "9491936dd19ad71bf797e5eb788c6d1515bca3625a4b51d67ba72da72558aaaf",
+      "gitBlob": "a1a6d05a374660ff152efe5a500fc93ec9602377"
+    },
+    {
+      "path": "src/lib/ink/noise.ts",
+      "bytes": 1007,
+      "sha256": "0beb602cb495aec44242a3c890722dcd8dc89a83a781d3a5a3943754b70f3028",
+      "gitBlob": "f3e0811f4eebeecfa9a4fab77523deeb618641cc"
+    },
+    {
+      "path": "src/lib/ink/paint.ts",
+      "bytes": 2176,
+      "sha256": "b0541b784dc79726830c9a6b23b4bc654ce0313c635863c926fa4ce9b2a138b0",
+      "gitBlob": "edafc2be15dc6924a39624d9717b400ff8a26148"
+    },
+    {
+      "path": "src/lib/ink/paper/defs.tsx",
+      "bytes": 1152,
+      "sha256": "c57eb59daf95a0c4c85f10bd63ae4c01206561272dda3e4d0b51481ea33b0843",
+      "gitBlob": "4b713a9f7e4286fd75b73ee8254032bb7eb3a9bf"
+    },
+    {
+      "path": "src/lib/ink/paper/edges.ts",
+      "bytes": 7966,
+      "sha256": "590e7990d845cdc3d9a6e174267937390b8590d248e37fbd871dac6b8507d853",
+      "gitBlob": "9922d718edbee6d51cb43a3c68e793a4ff4e52cb"
+    },
+    {
+      "path": "src/lib/ink/paper/faces.ts",
+      "bytes": 9134,
+      "sha256": "e60401611116d44f78eba0efc26ba6c9f83186c0e08e5d8f61f5dfe835ebc8ab",
+      "gitBlob": "6ee46de4fb8471255cd51bd01094e0d2b2b19301"
+    },
+    {
+      "path": "src/lib/ink/paper/prop-svg.tsx",
+      "bytes": 778,
+      "sha256": "dece8de26a4d0c6a89d5a9cdae36aeebebd0c41dae1a3926ab5a3f8cb3d7f559",
+      "gitBlob": "d4326b456cde0550245483781fcae3cf8a3d995d"
+    },
+    {
+      "path": "src/lib/ink/paper/props.ts",
+      "bytes": 23984,
+      "sha256": "a8f162eeafc1d5348e9e145ee4b0d6800b4f89d7cf66eccb0c8e0d8821d6e1f2",
+      "gitBlob": "3543ba8be092f4090fbeb8866cd79f145b94b950"
+    },
+    {
+      "path": "src/lib/ink/paper/shadows.ts",
+      "bytes": 3292,
+      "sha256": "e7ccbc07635788e152c5167e1d3a1391d945d2485627529fc39c523059849615",
+      "gitBlob": "69128c42e760276d9235399707f6d6bbe312ec34"
+    },
+    {
+      "path": "src/lib/ink/paper/sheet-layers.tsx",
+      "bytes": 4511,
+      "sha256": "904d626ca3f9c14b2cbe0bfd4cc636f29553d1a892d878e5c4459d5cd3983dc3",
+      "gitBlob": "89f8783635d178bbc9b98f34ee813723303d6e65"
+    },
+    {
+      "path": "src/lib/ink/paper/stocks.ts",
+      "bytes": 12553,
+      "sha256": "69abf5eaf7039fb59e369672a9d3697c619d49b888fc5c3a95fdde488f785916",
+      "gitBlob": "0586a3346b891990d2a33685f572f855edbb52a1"
+    },
+    {
+      "path": "src/lib/ink/pen.ts",
+      "bytes": 19740,
+      "sha256": "14a883336416b7f98e7445177bb2973bcf7c72aad0bee76575d18cda65a2aa04",
+      "gitBlob": "1faca742b1b4c64b12538400552f8b0ec0b805f1"
+    },
+    {
+      "path": "src/lib/ink/pens.ts",
+      "bytes": 4372,
+      "sha256": "e94d8257df5ebfb94ba705b3fdacc89f8928954e388c0c270b41eb804c5330af",
+      "gitBlob": "1e721206b271d7097acc482925f0d7eb610c230a"
+    },
+    {
+      "path": "src/lib/ink/react/cache.ts",
+      "bytes": 4439,
+      "sha256": "221cd34d45a94e2443cd427a998e1297d0f2bad4c5bee98938485983952bf1f8",
+      "gitBlob": "b5c93e8ce605c230895d4ca2a50d63b95b0bcedb"
+    },
+    {
+      "path": "src/lib/ink/react/defs.tsx",
+      "bytes": 3394,
+      "sha256": "445c0e501035ea7b79d1784c40b2ef52cdb10829dc0be6c5f8bb6c37f5f80e4a",
+      "gitBlob": "99a3aa7610125821942a8511eb05e6574627b537"
+    },
+    {
+      "path": "src/lib/ink/react/ensure-defs.ts",
+      "bytes": 331,
+      "sha256": "a9adad36bd71e0afe5874deb0c719256971b9d83ea767347862acfb941e3f30a",
+      "gitBlob": "2ec1774fa714f010d3c985bbd6933b7d173db324"
+    },
+    {
+      "path": "src/lib/ink/react/hooks.ts",
+      "bytes": 8127,
+      "sha256": "836712fdb307a9c258082a7b2791f0ca277b00b9e38fc2c777df19f87d934f46",
+      "gitBlob": "7495660d84fa95067d0972badab4d6ef54b97ab2"
+    },
+    {
+      "path": "src/lib/ink/react/icon-size.ts",
+      "bytes": 216,
+      "sha256": "097460e42cc1c5cb8bf5600c3f26f154b8a3be377710e4e23b996097569d7b20",
+      "gitBlob": "6736463b639b7794d5d2537a3e73bc83d1d00342"
+    },
+    {
+      "path": "src/lib/ink/react/index.ts",
+      "bytes": 910,
+      "sha256": "3d7628479c66b2c8c6e708a8a8f0907a03f00264ded28908f5f66fa30b85e44b",
+      "gitBlob": "1f51249e65b488d8c30d8028fb51d446227d2083"
+    },
+    {
+      "path": "src/lib/ink/react/ink-layer.tsx",
+      "bytes": 1141,
+      "sha256": "434f3a3d49dee475ef894ec886bed8df99c40f63cf5daad9325da18ea57837ce",
+      "gitBlob": "ecd71ada1c3210ca43396b3071867a031e377b49"
+    },
+    {
+      "path": "src/lib/ink/react/provider.tsx",
+      "bytes": 4064,
+      "sha256": "859f3ff2fadb6d634056f659343bf4578d681ffa878cf0a215b390b368ffb3fd",
+      "gitBlob": "4443e2996e09b8d4d82982754e41faaa0a875783"
+    },
+    {
+      "path": "src/lib/ink/react/svg.tsx",
+      "bytes": 1048,
+      "sha256": "85f789ad55656faf288583f2cef85651d55e57a8057b5d488511f2ddcb8e9508",
+      "gitBlob": "bbd5403d7f3559b4e6d40c01e82cad9d844adc9b"
+    },
+    {
+      "path": "src/lib/ink/recipes/badge-ink.ts",
+      "bytes": 3886,
+      "sha256": "45676fc2300f7b07d1c9cf59b43192fa34bbb35bf5e76da08a1904967e99b1d9",
+      "gitBlob": "ce5455006bf8c4c301ea4e1a33bb8346a616a40a"
+    },
+    {
+      "path": "src/lib/ink/recipes/button-ink.ts",
+      "bytes": 5565,
+      "sha256": "230529cd7990a295f6c4b0ad4a5b0e345e9489d0031c5d7c8bfa3d5e41ec9e53",
+      "gitBlob": "e6f932a2680ea766bbe30e1cb74e428f64793607"
+    },
+    {
+      "path": "src/lib/ink/recipes/card-ink.ts",
+      "bytes": 1333,
+      "sha256": "8b046eddc50fc2da1f2ed66e2eb1d0a1269ad1bbb4cf5b3712a93f4afe95b634",
+      "gitBlob": "880e33689be7117a04f176362ade6b84bae985d9"
+    },
+    {
+      "path": "src/lib/ink/recipes/index.ts",
+      "bytes": 6145,
+      "sha256": "ae84d6d5cc10e9b69981c27b8ad50b82cbd7949df65c1e85ff5fe758c238e33f",
+      "gitBlob": "aee7afab4693a275728f8ae8918d80c6329da199"
+    },
+    {
+      "path": "src/lib/ink/recipes/paper-ink.ts",
+      "bytes": 6455,
+      "sha256": "5f35935fa766c1bc817dd1fff68c4c38c591446bbab0637430638a94d87ba02d",
+      "gitBlob": "25faa6206d31957ff4e2629cad8a823d0258128c"
+    },
+    {
+      "path": "src/lib/ink/rng.ts",
+      "bytes": 2433,
+      "sha256": "aadd28b9a9430a127238668d584ebbd600a73d26311ca2c4a908835bdc5f6251",
+      "gitBlob": "84d0494d8d1ff436cd64425d9621b7f678139c98"
+    },
+    {
+      "path": "src/lib/ink/shapes.ts",
+      "bytes": 24746,
+      "sha256": "c62292d335d967fa6db4ce336734db417d6d0dacd281c023f7e1c1e0f52ad18a",
+      "gitBlob": "9f1605374a6ed3c3afb6cfc12559b5da0eca80d9"
+    },
+    {
+      "path": "src/lib/ink/textures-paper.generated.ts",
+      "bytes": 180240,
+      "sha256": "dceef283bf8e67ea958a7b9530f0665ca8b04583ec9314f4661e266eee942f31",
+      "gitBlob": "ceb9b42c18411a1145fb517304667a70cdd16764"
+    },
+    {
+      "path": "src/lib/ink/textures.generated.ts",
+      "bytes": 93265,
+      "sha256": "00e85d1fd504115aaa7f28c8608bf3e50e095286cb43eaa2b19bb8e20d9f2381",
+      "gitBlob": "61bdd3248d0e156c3e3c7b4a1c3e8014ffb357cd"
+    },
+    {
+      "path": "src/lib/ink/textures.ts",
+      "bytes": 8982,
+      "sha256": "bc61e238a0c1faa1c47bf7732c45b473769cc448450cb629dd12d056083cb648",
+      "gitBlob": "2850ed8fe2ac505dd24ed76e1283eef02a0f3dd7"
+    },
+    {
+      "path": "src/lib/ink/types.ts",
+      "bytes": 2136,
+      "sha256": "a9ab639be8abf3de92207aacb6b5eb65822697ff82fa80b6a0079e8ae80fd12b",
+      "gitBlob": "f261375c4fa9487e58af3efe81038ef2d665d1ca"
+    },
+    {
+      "path": "src/lib/utils.ts",
+      "bytes": 166,
+      "sha256": "7c8c3dfc0cdd370d44932828eb067ef771c8fe7996693221d5d4b90af6d54f2d",
+      "gitBlob": "bd0c391ddd1088e9067844c48835bf4abcd61783"
+    },
+    {
+      "path": "src/styles/looseleaf.css",
+      "bytes": 42442,
+      "sha256": "0b2b9ba3ac64d6e3669aaccfd09773f2cd229725c0d087a8a73423c6876fd6c6",
+      "gitBlob": "b7e02292336371469e8935a48ca9de63d47ba4d6"
+    }
+  ],
+  "sourceImportsIncludingTypes": {
+    "src/components/ui/button.tsx": [
+      {
+        "specifier": "react",
+        "path": null
+      },
+      {
+        "specifier": "class-variance-authority",
+        "path": null
+      },
+      {
+        "specifier": "radix-ui",
+        "path": null
+      },
+      {
+        "specifier": "@/lib/ink/react",
+        "path": "src/lib/ink/react/index.ts"
+      },
+      {
+        "specifier": "@/lib/ink/recipes/button-ink",
+        "path": "src/lib/ink/recipes/button-ink.ts"
+      },
+      {
+        "specifier": "@/lib/utils",
+        "path": "src/lib/utils.ts"
+      }
+    ],
+    "src/components/ui/card.tsx": [
+      {
+        "specifier": "react",
+        "path": null
+      },
+      {
+        "specifier": "@/components/ui/paper",
+        "path": "src/components/ui/paper.tsx"
+      },
+      {
+        "specifier": "@/lib/ink/react",
+        "path": "src/lib/ink/react/index.ts"
+      },
+      {
+        "specifier": "@/lib/ink/recipes/card-ink",
+        "path": "src/lib/ink/recipes/card-ink.ts"
+      },
+      {
+        "specifier": "@/lib/utils",
+        "path": "src/lib/utils.ts"
+      }
+    ],
+    "src/components/ui/badge.tsx": [
+      {
+        "specifier": "react",
+        "path": null
+      },
+      {
+        "specifier": "class-variance-authority",
+        "path": null
+      },
+      {
+        "specifier": "radix-ui",
+        "path": null
+      },
+      {
+        "specifier": "@/lib/ink/react",
+        "path": "src/lib/ink/react/index.ts"
+      },
+      {
+        "specifier": "@/lib/ink/recipes/badge-ink",
+        "path": "src/lib/ink/recipes/badge-ink.ts"
+      },
+      {
+        "specifier": "@/lib/utils",
+        "path": "src/lib/utils.ts"
+      }
+    ],
+    "src/lib/ink/recipes/button-ink.ts": [
+      {
+        "specifier": "@/lib/ink/fills",
+        "path": "src/lib/ink/fills.ts"
+      },
+      {
+        "specifier": "@/lib/ink/geom",
+        "path": "src/lib/ink/geom.ts"
+      },
+      {
+        "specifier": "@/lib/ink/shapes",
+        "path": "src/lib/ink/shapes.ts"
+      },
+      {
+        "specifier": "@/lib/ink/rng",
+        "path": "src/lib/ink/rng.ts"
+      },
+      {
+        "specifier": "@/lib/ink/recipes",
+        "path": "src/lib/ink/recipes/index.ts"
+      }
+    ],
+    "src/lib/utils.ts": [
+      {
+        "specifier": "clsx",
+        "path": null
+      },
+      {
+        "specifier": "tailwind-merge",
+        "path": null
+      }
+    ],
+    "src/components/ui/paper.tsx": [
+      {
+        "specifier": "react",
+        "path": null
+      },
+      {
+        "specifier": "@/lib/ink/paper/edges",
+        "path": "src/lib/ink/paper/edges.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paper/defs",
+        "path": "src/lib/ink/paper/defs.tsx"
+      },
+      {
+        "specifier": "@/lib/ink/paper/faces",
+        "path": "src/lib/ink/paper/faces.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paper/props",
+        "path": "src/lib/ink/paper/props.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paper/prop-svg",
+        "path": "src/lib/ink/paper/prop-svg.tsx"
+      },
+      {
+        "specifier": "@/lib/ink/paper/sheet-layers",
+        "path": "src/lib/ink/paper/sheet-layers.tsx"
+      },
+      {
+        "specifier": "@/lib/ink/paper/shadows",
+        "path": "src/lib/ink/paper/shadows.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paper/stocks",
+        "path": "src/lib/ink/paper/stocks.ts"
+      },
+      {
+        "specifier": "@/lib/ink/react",
+        "path": "src/lib/ink/react/index.ts"
+      },
+      {
+        "specifier": "@/lib/ink/recipes/paper-ink",
+        "path": "src/lib/ink/recipes/paper-ink.ts"
+      },
+      {
+        "specifier": "@/lib/utils",
+        "path": "src/lib/utils.ts"
+      },
+      {
+        "specifier": "@/components/ui/tape",
+        "path": "src/components/ui/tape.tsx"
+      }
+    ],
+    "src/lib/ink/react/index.ts": [
+      {
+        "specifier": "@/lib/ink/react/defs",
+        "path": "src/lib/ink/react/defs.tsx"
+      },
+      {
+        "specifier": "@/lib/ink/react/ensure-defs",
+        "path": "src/lib/ink/react/ensure-defs.ts"
+      },
+      {
+        "specifier": "@/lib/ink/react/icon-size",
+        "path": "src/lib/ink/react/icon-size.ts"
+      },
+      {
+        "specifier": "@/lib/ink/react/provider",
+        "path": "src/lib/ink/react/provider.tsx"
+      },
+      {
+        "specifier": "@/lib/ink/react/ink-layer",
+        "path": "src/lib/ink/react/ink-layer.tsx"
+      },
+      {
+        "specifier": "@/lib/ink/react/svg",
+        "path": "src/lib/ink/react/svg.tsx"
+      },
+      {
+        "specifier": "@/lib/ink/react/hooks",
+        "path": "src/lib/ink/react/hooks.ts"
+      },
+      {
+        "specifier": "@/lib/ink/react/cache",
+        "path": "src/lib/ink/react/cache.ts"
+      },
+      {
+        "specifier": "@/lib/ink/recipes",
+        "path": "src/lib/ink/recipes/index.ts"
+      }
+    ],
+    "src/lib/ink/recipes/card-ink.ts": [
+      {
+        "specifier": "@/lib/ink",
+        "path": "src/lib/ink/index.ts"
+      },
+      {
+        "specifier": "@/lib/ink/recipes",
+        "path": "src/lib/ink/recipes/index.ts"
+      }
+    ],
+    "src/lib/ink/recipes/badge-ink.ts": [
+      {
+        "specifier": "@/lib/ink/fills",
+        "path": "src/lib/ink/fills.ts"
+      },
+      {
+        "specifier": "@/lib/ink/geom",
+        "path": "src/lib/ink/geom.ts"
+      },
+      {
+        "specifier": "@/lib/ink/shapes",
+        "path": "src/lib/ink/shapes.ts"
+      },
+      {
+        "specifier": "@/lib/ink/recipes",
+        "path": "src/lib/ink/recipes/index.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paint",
+        "path": "src/lib/ink/paint.ts"
+      }
+    ],
+    "src/lib/ink/fills.ts": [
+      {
+        "specifier": "@/lib/ink/types",
+        "path": "src/lib/ink/types.ts"
+      },
+      {
+        "specifier": "@/lib/ink/builder",
+        "path": "src/lib/ink/builder.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paint",
+        "path": "src/lib/ink/paint.ts"
+      },
+      {
+        "specifier": "@/lib/ink/rng",
+        "path": "src/lib/ink/rng.ts"
+      },
+      {
+        "specifier": "@/lib/ink/noise",
+        "path": "src/lib/ink/noise.ts"
+      },
+      {
+        "specifier": "@/lib/ink/geom",
+        "path": "src/lib/ink/geom.ts"
+      },
+      {
+        "specifier": "@/lib/ink/pens",
+        "path": "src/lib/ink/pens.ts"
+      }
+    ],
+    "src/lib/ink/recipes/index.ts": [
+      {
+        "specifier": "@/lib/ink/builder",
+        "path": "src/lib/ink/builder.ts"
+      },
+      {
+        "specifier": "@/lib/ink/types",
+        "path": "src/lib/ink/types.ts"
+      }
+    ],
+    "src/lib/ink/paper/edges.ts": [
+      {
+        "specifier": "@/lib/ink/types",
+        "path": "src/lib/ink/types.ts"
+      },
+      {
+        "specifier": "@/lib/ink/rng",
+        "path": "src/lib/ink/rng.ts"
+      },
+      {
+        "specifier": "@/lib/ink/noise",
+        "path": "src/lib/ink/noise.ts"
+      },
+      {
+        "specifier": "@/lib/ink/geom",
+        "path": "src/lib/ink/geom.ts"
+      }
+    ],
+    "src/lib/ink/shapes.ts": [
+      {
+        "specifier": "@/lib/ink/types",
+        "path": "src/lib/ink/types.ts"
+      },
+      {
+        "specifier": "@/lib/ink/builder",
+        "path": "src/lib/ink/builder.ts"
+      },
+      {
+        "specifier": "@/lib/ink/rng",
+        "path": "src/lib/ink/rng.ts"
+      },
+      {
+        "specifier": "@/lib/ink/geom",
+        "path": "src/lib/ink/geom.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paint",
+        "path": "src/lib/ink/paint.ts"
+      },
+      {
+        "specifier": "@/lib/ink/pens",
+        "path": "src/lib/ink/pens.ts"
+      }
+    ],
+    "src/lib/ink/geom.ts": [
+      {
+        "specifier": "@/lib/ink/types",
+        "path": "src/lib/ink/types.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paint",
+        "path": "src/lib/ink/paint.ts"
+      },
+      {
+        "specifier": "@/lib/ink/rng",
+        "path": "src/lib/ink/rng.ts"
+      },
+      {
+        "specifier": "@/lib/ink/noise",
+        "path": "src/lib/ink/noise.ts"
+      }
+    ],
+    "src/lib/ink/paper/defs.tsx": [
+      {
+        "specifier": "react",
+        "path": null
+      },
+      {
+        "specifier": "@/lib/ink/textures",
+        "path": "src/lib/ink/textures.ts"
+      }
+    ],
+    "src/lib/ink/paper/faces.ts": [
+      {
+        "specifier": "@/lib/ink/paper/shadows",
+        "path": "src/lib/ink/paper/shadows.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paper/stocks",
+        "path": "src/lib/ink/paper/stocks.ts"
+      },
+      {
+        "specifier": "@/lib/ink/textures",
+        "path": "src/lib/ink/textures.ts"
+      }
+    ],
+    "src/lib/ink/paper/shadows.ts": [
+      {
+        "specifier": "@/lib/ink/rng",
+        "path": "src/lib/ink/rng.ts"
+      }
+    ],
+    "src/lib/ink/paper/props.ts": [
+      {
+        "specifier": "@/lib/ink/builder",
+        "path": "src/lib/ink/builder.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paint",
+        "path": "src/lib/ink/paint.ts"
+      },
+      {
+        "specifier": "@/lib/ink/rng",
+        "path": "src/lib/ink/rng.ts"
+      },
+      {
+        "specifier": "@/lib/ink/noise",
+        "path": "src/lib/ink/noise.ts"
+      },
+      {
+        "specifier": "@/lib/ink/geom",
+        "path": "src/lib/ink/geom.ts"
+      },
+      {
+        "specifier": "@/lib/ink/types",
+        "path": "src/lib/ink/types.ts"
+      }
+    ],
+    "src/lib/ink/paper/prop-svg.tsx": [
+      {
+        "specifier": "react",
+        "path": null
+      },
+      {
+        "specifier": "@/lib/ink/builder",
+        "path": "src/lib/ink/builder.ts"
+      },
+      {
+        "specifier": "@/lib/ink/react/defs",
+        "path": "src/lib/ink/react/defs.tsx"
+      },
+      {
+        "specifier": "@/lib/ink/react/hooks",
+        "path": "src/lib/ink/react/hooks.ts"
+      }
+    ],
+    "src/lib/ink/rng.ts": [],
+    "src/components/ui/tape.tsx": [
+      {
+        "specifier": "react",
+        "path": null
+      },
+      {
+        "specifier": "@/lib/ink/paper/shadows",
+        "path": "src/lib/ink/paper/shadows.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paper/props",
+        "path": "src/lib/ink/paper/props.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paper/prop-svg",
+        "path": "src/lib/ink/paper/prop-svg.tsx"
+      },
+      {
+        "specifier": "@/lib/ink/react",
+        "path": "src/lib/ink/react/index.ts"
+      },
+      {
+        "specifier": "@/lib/utils",
+        "path": "src/lib/utils.ts"
+      }
+    ],
+    "src/lib/ink/react/defs.tsx": [
+      {
+        "specifier": "react",
+        "path": null
+      },
+      {
+        "specifier": "@/lib/ink/builder",
+        "path": "src/lib/ink/builder.ts"
+      },
+      {
+        "specifier": "@/lib/ink/textures",
+        "path": "src/lib/ink/textures.ts"
+      }
+    ],
+    "src/lib/ink/recipes/paper-ink.ts": [
+      {
+        "specifier": "@/lib/ink/builder",
+        "path": "src/lib/ink/builder.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paint",
+        "path": "src/lib/ink/paint.ts"
+      },
+      {
+        "specifier": "@/lib/ink/recipes",
+        "path": "src/lib/ink/recipes/index.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paper/props",
+        "path": "src/lib/ink/paper/props.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paper/stocks",
+        "path": "src/lib/ink/paper/stocks.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paper/edges",
+        "path": "src/lib/ink/paper/edges.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paper/faces",
+        "path": "src/lib/ink/paper/faces.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paper/shadows",
+        "path": "src/lib/ink/paper/shadows.ts"
+      },
+      {
+        "specifier": "@/lib/ink/types",
+        "path": "src/lib/ink/types.ts"
+      },
+      {
+        "specifier": "@/lib/ink/shapes",
+        "path": "src/lib/ink/shapes.ts"
+      }
+    ],
+    "src/lib/ink/paper/sheet-layers.tsx": [
+      {
+        "specifier": "react",
+        "path": null
+      },
+      {
+        "specifier": "@/lib/ink/builder",
+        "path": "src/lib/ink/builder.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paper/faces",
+        "path": "src/lib/ink/paper/faces.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paper/shadows",
+        "path": "src/lib/ink/paper/shadows.ts"
+      },
+      {
+        "specifier": "@/lib/ink/react",
+        "path": "src/lib/ink/react/index.ts"
+      },
+      {
+        "specifier": "@/lib/ink/recipes",
+        "path": "src/lib/ink/recipes/index.ts"
+      }
+    ],
+    "src/lib/ink/react/ensure-defs.ts": [
+      {
+        "specifier": "react",
+        "path": null
+      },
+      {
+        "specifier": "@/lib/ink/react/defs",
+        "path": "src/lib/ink/react/defs.tsx"
+      },
+      {
+        "specifier": "@/lib/ink/react/hooks",
+        "path": "src/lib/ink/react/hooks.ts"
+      }
+    ],
+    "src/lib/ink/paper/stocks.ts": [
+      {
+        "specifier": "@/lib/ink/paper/edges",
+        "path": "src/lib/ink/paper/edges.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paper/shadows",
+        "path": "src/lib/ink/paper/shadows.ts"
+      }
+    ],
+    "src/lib/ink/react/icon-size.ts": [
+      {
+        "specifier": "react",
+        "path": null
+      }
+    ],
+    "src/lib/ink/react/ink-layer.tsx": [
+      {
+        "specifier": "react",
+        "path": null
+      },
+      {
+        "specifier": "@/lib/ink/react/hooks",
+        "path": "src/lib/ink/react/hooks.ts"
+      },
+      {
+        "specifier": "@/lib/ink/react/svg",
+        "path": "src/lib/ink/react/svg.tsx"
+      }
+    ],
+    "src/lib/ink/react/provider.tsx": [
+      {
+        "specifier": "react",
+        "path": null
+      },
+      {
+        "specifier": "@/lib/ink/builder",
+        "path": "src/lib/ink/builder.ts"
+      },
+      {
+        "specifier": "@/lib/ink/types",
+        "path": "src/lib/ink/types.ts"
+      },
+      {
+        "specifier": "@/lib/ink/textures",
+        "path": "src/lib/ink/textures.ts"
+      },
+      {
+        "specifier": "@/lib/ink/react/defs",
+        "path": "src/lib/ink/react/defs.tsx"
+      },
+      {
+        "specifier": "@/lib/ink/react/hooks",
+        "path": "src/lib/ink/react/hooks.ts"
+      },
+      {
+        "specifier": "@/lib/ink/recipes",
+        "path": "src/lib/ink/recipes/index.ts"
+      }
+    ],
+    "src/lib/ink/react/svg.tsx": [
+      {
+        "specifier": "react",
+        "path": null
+      },
+      {
+        "specifier": "@/lib/ink/builder",
+        "path": "src/lib/ink/builder.ts"
+      },
+      {
+        "specifier": "@/lib/ink/react/cache",
+        "path": "src/lib/ink/react/cache.ts"
+      }
+    ],
+    "src/lib/ink/react/hooks.ts": [
+      {
+        "specifier": "react",
+        "path": null
+      },
+      {
+        "specifier": "@/lib/ink/builder",
+        "path": "src/lib/ink/builder.ts"
+      },
+      {
+        "specifier": "@/lib/ink/types",
+        "path": "src/lib/ink/types.ts"
+      },
+      {
+        "specifier": "@/lib/ink/react/defs",
+        "path": "src/lib/ink/react/defs.tsx"
+      },
+      {
+        "specifier": "@/lib/ink/react/cache",
+        "path": "src/lib/ink/react/cache.ts"
+      },
+      {
+        "specifier": "@/lib/ink/react/svg",
+        "path": "src/lib/ink/react/svg.tsx"
+      },
+      {
+        "specifier": "@/lib/ink/recipes",
+        "path": "src/lib/ink/recipes/index.ts"
+      }
+    ],
+    "src/lib/ink/react/cache.ts": [
+      {
+        "specifier": "@/lib/ink/builder",
+        "path": "src/lib/ink/builder.ts"
+      },
+      {
+        "specifier": "@/lib/ink/types",
+        "path": "src/lib/ink/types.ts"
+      },
+      {
+        "specifier": "@/lib/ink/recipes",
+        "path": "src/lib/ink/recipes/index.ts"
+      }
+    ],
+    "src/lib/ink/index.ts": [
+      {
+        "specifier": "@/lib/ink/types",
+        "path": "src/lib/ink/types.ts"
+      },
+      {
+        "specifier": "@/lib/ink/rng",
+        "path": "src/lib/ink/rng.ts"
+      },
+      {
+        "specifier": "@/lib/ink/noise",
+        "path": "src/lib/ink/noise.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paint",
+        "path": "src/lib/ink/paint.ts"
+      },
+      {
+        "specifier": "@/lib/ink/geom",
+        "path": "src/lib/ink/geom.ts"
+      },
+      {
+        "specifier": "@/lib/ink/pens",
+        "path": "src/lib/ink/pens.ts"
+      },
+      {
+        "specifier": "@/lib/ink/pen",
+        "path": "src/lib/ink/pen.ts"
+      },
+      {
+        "specifier": "@/lib/ink/shapes",
+        "path": "src/lib/ink/shapes.ts"
+      },
+      {
+        "specifier": "@/lib/ink/fills",
+        "path": "src/lib/ink/fills.ts"
+      },
+      {
+        "specifier": "@/lib/ink/builder",
+        "path": "src/lib/ink/builder.ts"
+      },
+      {
+        "specifier": "@/lib/ink/recipes",
+        "path": "src/lib/ink/recipes/index.ts"
+      },
+      {
+        "specifier": "@/lib/ink/react",
+        "path": "src/lib/ink/react/index.ts"
+      }
+    ],
+    "src/lib/ink/paint.ts": [],
+    "src/lib/ink/types.ts": [
+      {
+        "specifier": "@/lib/ink/paint",
+        "path": "src/lib/ink/paint.ts"
+      }
+    ],
+    "src/lib/ink/pens.ts": [
+      {
+        "specifier": "@/lib/ink/paint",
+        "path": "src/lib/ink/paint.ts"
+      },
+      {
+        "specifier": "@/lib/ink/types",
+        "path": "src/lib/ink/types.ts"
+      }
+    ],
+    "src/lib/ink/textures.ts": [
+      {
+        "specifier": "@/lib/ink/textures.generated",
+        "path": "src/lib/ink/textures.generated.ts"
+      },
+      {
+        "specifier": "@/lib/ink/textures-paper.generated",
+        "path": "src/lib/ink/textures-paper.generated.ts"
+      }
+    ],
+    "src/lib/ink/builder.ts": [
+      {
+        "specifier": "@/lib/ink/types",
+        "path": "src/lib/ink/types.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paint",
+        "path": "src/lib/ink/paint.ts"
+      },
+      {
+        "specifier": "@/lib/ink/rng",
+        "path": "src/lib/ink/rng.ts"
+      },
+      {
+        "specifier": "@/lib/ink/geom",
+        "path": "src/lib/ink/geom.ts"
+      },
+      {
+        "specifier": "@/lib/ink/pen",
+        "path": "src/lib/ink/pen.ts"
+      },
+      {
+        "specifier": "@/lib/ink/pens",
+        "path": "src/lib/ink/pens.ts"
+      }
+    ],
+    "src/lib/ink/noise.ts": [
+      {
+        "specifier": "@/lib/ink/rng",
+        "path": "src/lib/ink/rng.ts"
+      }
+    ],
+    "src/lib/ink/pen.ts": [
+      {
+        "specifier": "@/lib/ink/types",
+        "path": "src/lib/ink/types.ts"
+      },
+      {
+        "specifier": "@/lib/ink/paint",
+        "path": "src/lib/ink/paint.ts"
+      },
+      {
+        "specifier": "@/lib/ink/rng",
+        "path": "src/lib/ink/rng.ts"
+      },
+      {
+        "specifier": "@/lib/ink/noise",
+        "path": "src/lib/ink/noise.ts"
+      },
+      {
+        "specifier": "@/lib/ink/geom",
+        "path": "src/lib/ink/geom.ts"
+      },
+      {
+        "specifier": "@/lib/ink/pens",
+        "path": "src/lib/ink/pens.ts"
+      }
+    ],
+    "src/lib/ink/textures.generated.ts": [],
+    "src/lib/ink/textures-paper.generated.ts": []
+  },
+  "registry": {
+    "button": {
+      "dependencies": [
+        "class-variance-authority",
+        "radix-ui"
+      ],
+      "devDependencies": [],
+      "registryDependencies": [
+        "ink",
+        "looseleaf-theme"
+      ],
+      "files": [
+        {
+          "path": "src/components/ui/button.tsx",
+          "bytes": 3974
+        },
+        {
+          "path": "src/lib/ink/recipes/button-ink.ts",
+          "bytes": 5565
+        }
+      ]
+    },
+    "badge": {
+      "dependencies": [
+        "class-variance-authority",
+        "radix-ui"
+      ],
+      "devDependencies": [],
+      "registryDependencies": [
+        "ink",
+        "looseleaf-theme"
+      ],
+      "files": [
+        {
+          "path": "src/components/ui/badge.tsx",
+          "bytes": 3749
+        },
+        {
+          "path": "src/lib/ink/recipes/badge-ink.ts",
+          "bytes": 3886
+        }
+      ]
+    },
+    "card": {
+      "dependencies": [],
+      "devDependencies": [],
+      "registryDependencies": [
+        "ink",
+        "looseleaf-theme",
+        "paper"
+      ],
+      "files": [
+        {
+          "path": "src/components/ui/card.tsx",
+          "bytes": 3283
+        },
+        {
+          "path": "src/lib/ink/recipes/card-ink.ts",
+          "bytes": 1333
+        }
+      ]
+    },
+    "utils": {
+      "dependencies": [
+        "clsx",
+        "tailwind-merge"
+      ],
+      "devDependencies": [],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/lib/utils.ts",
+          "bytes": 166
+        }
+      ]
+    },
+    "ink": {
+      "dependencies": [],
+      "devDependencies": [],
+      "registryDependencies": [
+        "ink-grain-textures",
+        "ink-paper-textures"
+      ],
+      "files": [
+        {
+          "path": "src/lib/ink/builder.ts",
+          "bytes": 15474
+        },
+        {
+          "path": "src/lib/ink/fills.ts",
+          "bytes": 12917
+        },
+        {
+          "path": "src/lib/ink/geom.ts",
+          "bytes": 15650
+        },
+        {
+          "path": "src/lib/ink/index.ts",
+          "bytes": 821
+        },
+        {
+          "path": "src/lib/ink/noise.ts",
+          "bytes": 1007
+        },
+        {
+          "path": "src/lib/ink/paint.ts",
+          "bytes": 2176
+        },
+        {
+          "path": "src/lib/ink/pen.ts",
+          "bytes": 19740
+        },
+        {
+          "path": "src/lib/ink/pens.ts",
+          "bytes": 4372
+        },
+        {
+          "path": "src/lib/ink/react/cache.ts",
+          "bytes": 4439
+        },
+        {
+          "path": "src/lib/ink/react/defs.tsx",
+          "bytes": 3394
+        },
+        {
+          "path": "src/lib/ink/react/ensure-defs.ts",
+          "bytes": 331
+        },
+        {
+          "path": "src/lib/ink/react/hooks.ts",
+          "bytes": 8127
+        },
+        {
+          "path": "src/lib/ink/react/icon-size.ts",
+          "bytes": 216
+        },
+        {
+          "path": "src/lib/ink/react/index.ts",
+          "bytes": 910
+        },
+        {
+          "path": "src/lib/ink/react/ink-layer.tsx",
+          "bytes": 1141
+        },
+        {
+          "path": "src/lib/ink/react/provider.tsx",
+          "bytes": 4064
+        },
+        {
+          "path": "src/lib/ink/react/svg.tsx",
+          "bytes": 1048
+        },
+        {
+          "path": "src/lib/ink/recipes/index.ts",
+          "bytes": 6145
+        },
+        {
+          "path": "src/lib/ink/rng.ts",
+          "bytes": 2433
+        },
+        {
+          "path": "src/lib/ink/shapes.ts",
+          "bytes": 24746
+        },
+        {
+          "path": "src/lib/ink/textures.ts",
+          "bytes": 8982
+        },
+        {
+          "path": "src/lib/ink/types.ts",
+          "bytes": 2136
+        }
+      ]
+    },
+    "looseleaf-theme": {
+      "dependencies": [],
+      "devDependencies": [
+        "tw-animate-css"
+      ],
+      "registryDependencies": [
+        "font-kevin-sans",
+        "font-ibm-plex-mono"
+      ],
+      "files": []
+    },
+    "paper": {
+      "dependencies": [],
+      "devDependencies": [],
+      "registryDependencies": [
+        "ink",
+        "ink-paper",
+        "looseleaf-theme",
+        "tape"
+      ],
+      "files": [
+        {
+          "path": "src/components/ui/paper.tsx",
+          "bytes": 7749
+        },
+        {
+          "path": "src/lib/ink/recipes/paper-ink.ts",
+          "bytes": 6455
+        }
+      ]
+    },
+    "font-kevin-sans": {
+      "dependencies": [],
+      "devDependencies": [],
+      "registryDependencies": [],
+      "files": []
+    },
+    "font-ibm-plex-mono": {
+      "dependencies": [
+        "@fontsource/ibm-plex-mono"
+      ],
+      "devDependencies": [],
+      "registryDependencies": [],
+      "files": []
+    },
+    "ink-grain-textures": {
+      "dependencies": [],
+      "devDependencies": [],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/lib/ink/textures.generated.ts",
+          "bytes": 93265
+        }
+      ]
+    },
+    "ink-paper-textures": {
+      "dependencies": [],
+      "devDependencies": [],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/lib/ink/textures-paper.generated.ts",
+          "bytes": 180240
+        }
+      ]
+    },
+    "ink-paper": {
+      "dependencies": [],
+      "devDependencies": [],
+      "registryDependencies": [
+        "ink"
+      ],
+      "files": [
+        {
+          "path": "src/lib/ink/paper/defs.tsx",
+          "bytes": 1152
+        },
+        {
+          "path": "src/lib/ink/paper/edges.ts",
+          "bytes": 7966
+        },
+        {
+          "path": "src/lib/ink/paper/faces.ts",
+          "bytes": 9134
+        },
+        {
+          "path": "src/lib/ink/paper/index.ts",
+          "bytes": 193
+        },
+        {
+          "path": "src/lib/ink/paper/prop-svg.tsx",
+          "bytes": 778
+        },
+        {
+          "path": "src/lib/ink/paper/props.ts",
+          "bytes": 23984
+        },
+        {
+          "path": "src/lib/ink/paper/shadows.ts",
+          "bytes": 3292
+        },
+        {
+          "path": "src/lib/ink/paper/sheet-layers.tsx",
+          "bytes": 4511
+        },
+        {
+          "path": "src/lib/ink/paper/stocks.ts",
+          "bytes": 12553
+        },
+        {
+          "path": "src/lib/ink/recipes/paper-set-ink.ts",
+          "bytes": 6996
+        }
+      ]
+    },
+    "tape": {
+      "dependencies": [],
+      "devDependencies": [],
+      "registryDependencies": [
+        "ink",
+        "ink-paper",
+        "looseleaf-theme"
+      ],
+      "files": [
+        {
+          "path": "src/components/ui/tape.tsx",
+          "bytes": 1520
+        }
+      ]
+    }
+  },
+  "visualScope": "2026-11-17 user screenshot: textured cream paper, sage desk, CSS tape and highlights; shared React 18 and native controls"
+}

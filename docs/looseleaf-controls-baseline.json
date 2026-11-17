@@ -1,0 +1,142 @@
+{
+  "capturedAt": "2026-11-17T06:38:35.416Z",
+  "fixtureVersion": 1,
+  "environment": {
+    "node": "v24.18.1",
+    "dsh": "0.2.2-rc.1",
+    "browser": "157.0.4341.60",
+    "os": "win32 10.0.26200 x64",
+    "cpu": "12th Gen Intel(R) Core(TM) i7-12700H",
+    "playwright": "1.65.1",
+    "viewport": {
+      "width": 1366,
+      "height": 960
+    },
+    "headless": true,
+    "cpuThrottle": 1,
+    "react": "18.3.1",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/157.0.0.0 Safari/537.36 Edg/157.0.0.0",
+    "devicePixelRatio": 1,
+    "hardwareConcurrency": 20,
+    "streams": {
+      "streams": 1,
+      "activeStreams": 1,
+      "maxStreams": 1
+    },
+    "theme": {
+      "darkAttribute": true,
+      "colorScheme": "dark"
+    }
+  },
+  "source": {
+    "client": {
+      "bytes": 152211,
+      "gzipBytes": 54649,
+      "sha256": "527272bfc5a7332892f32a68cc02b6ea0f5073126064926e05b76ed013aa4d39"
+    },
+    "embeddedCss": {
+      "bytes": 59184,
+      "gzipBytes": 30368,
+      "sha256": "1ac24f922f958506a4153cdc0b124263ee784a3631ba53557b3ea5c2d1f00b72"
+    },
+    "gzipLevel": 9
+  },
+  "fixtureSha256": "c698c9f9881e317c3383058d0bb6737506158aa857035460f2201ddd192130f4",
+  "harnessSha256": "ecf747e63c6402734349ab95760b3221432941aff3150a1739aca86bee7ab6d6",
+  "method": {
+    "ordering": "appearances paired at each theme/count; reversed every round; one warm-up + five measured rounds",
+    "mount": "empty board -> all cards via real refresh + in-memory RPC",
+    "search": "native input event -> 10% matches",
+    "updates": "20 sequential status SSE frames; DOM + two rAF per frame",
+    "domMs": "action -> DOM predicate + forced layout",
+    "frameMs": "action -> two requestAnimationFrame callbacks after DOM; presentation proxy, not GPU paint timing",
+    "doneColumn": "expanded; all 100/500 cards present"
+  },
+  "results": [],
+  "visualChecks": {
+    "paperOnly": true,
+    "focusAndBackdrop": {
+      "textInputOutline": "none",
+      "searchOutline": "none",
+      "backdrop": "rgba(24, 23, 21, 0.22)"
+    },
+    "customSelect": {
+      "nativeSelects": 0,
+      "pointer": true,
+      "keyboard": true,
+      "escape": true,
+      "outside": true,
+      "tab": true,
+      "groups": true
+    },
+    "dialogFocus": true,
+    "menuDismissal": {
+      "outsidePointer": true,
+      "focus": true,
+      "escape": true,
+      "filterSelect": true
+    },
+    "launchSelections": true,
+    "deleteFlow": {
+      "cancelPreservesCard": true,
+      "confirmRemovesCard": true,
+      "writes": 1
+    },
+    "widths": [
+      {
+        "viewport": 1366,
+        "width": 1086,
+        "scrollWidth": 1086
+      },
+      {
+        "viewport": 1024,
+        "width": 744,
+        "scrollWidth": 744
+      },
+      {
+        "viewport": 768,
+        "width": 712,
+        "scrollWidth": 712
+      },
+      {
+        "viewport": 375,
+        "width": 375,
+        "scrollWidth": 375
+      }
+    ],
+    "streams": {
+      "streams": 1,
+      "activeStreams": 1,
+      "maxStreams": 1
+    }
+  },
+  "pageErrors": [],
+  "consoleErrors": [],
+  "unexpectedTaskWrites": [],
+  "protectedFiles": [
+    {
+      "path": "storages/tasks.json",
+      "hash": "41bd09b8f5f9939f090a89956804925151a04eca7537ddba7e03683208c8cc03",
+      "afterHash": "41bd09b8f5f9939f090a89956804925151a04eca7537ddba7e03683208c8cc03",
+      "unchanged": true
+    },
+    {
+      "path": "profiles/web/package.json",
+      "hash": "9ab60fb612da035f0d0681c6e7100821d4629617e6ef487637f653b705647c84",
+      "afterHash": "9ab60fb612da035f0d0681c6e7100821d4629617e6ef487637f653b705647c84",
+      "unchanged": true
+    },
+    {
+      "path": "profiles/web/cordis.yml",
+      "hash": "c300dcf2ebc5f02062d6591268d29d3db6fe45e0cb138f5467276fe2ba06076e",
+      "afterHash": "c300dcf2ebc5f02062d6591268d29d3db6fe45e0cb138f5467276fe2ba06076e",
+      "unchanged": true
+    },
+    {
+      "path": "profiles/web/cordis.patch.yml",
+      "hash": "036a76273d1a5bc9ffa7ea6d19fb1f97d7ac22ced3d778a04df4d06ac68e3479",
+      "afterHash": "036a76273d1a5bc9ffa7ea6d19fb1f97d7ac22ced3d778a04df4d06ac68e3479",
+      "unchanged": true
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "name": "dsh-plugin-tasks",
+  "version": "0.1.0",
+  "description": "DSH 任务看板：把要做的事变成能一键发射、并能实时看到状态的卡片",
+  "license": "MIT",
+  "author": "Tavlo-dsh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tavlo-dsh/tavlo-plugins-tasks.git"
+  },
+  "homepage": "https://github.com/Tavlo-dsh/tavlo-plugins-tasks#readme",
+  "bugs": {
+    "url": "https://github.com/Tavlo-dsh/tavlo-plugins-tasks/issues"
+  },
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "task-schema.js",
+    "task-store.js",
+    "task-options.js",
+    "task-events.js",
+    "task-sessions.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "licenses/*.txt",
+    "docs/*.md",
+    "docs/looseleaf-*.json",
+    "scripts/looseleaf-*.mjs",
+    "docs/screenshots/*.png"
+  ],
+  "icon": "./icon.svg",
+  "keywords": [
+    "dsh-plugin",
+    "tasks",
+    "kanban",
+    "tavlo"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "engines": {
+    "dsh": "0.2.2-rc.1"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/dsh-client-connection": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-scope": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "3.19.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-host-webserver": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-storage": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-storage-domain": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-storage-json": "0.2.2-rc.1",
+    "react": "^18.2.0"
+  }
+}

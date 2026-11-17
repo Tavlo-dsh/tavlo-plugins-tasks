@@ -1,0 +1,17 @@
+{
+  "meta": {
+    "title": "任务看板",
+    "description": "把要做的事变成能一键发射、并能实时看到会话状态的卡片。"
+  },
+  "panel": {
+    "title": "任务",
+    "newTask": "新建任务",
+    "emptyTodo": "没有待开始的任务",
+    "emptyDoing": "没有进行中的任务",
+    "emptyDone": "还没有已完成的任务",
+    "columnTodo": "待开始",
+    "columnDoing": "进行中",
+    "columnDone": "已完成",
+    "search": "搜索标题或描述…"
+  }
+}

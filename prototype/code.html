@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<meta content="web_dashboard" name="shell-type"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<style>
+    @layer base { 
+      html, body { margin: 0; padding: 0; } 
+      body { overscroll-behavior: none; } 
+      main > :first-child { margin-top: 0 !important; } 
+      main > :last-child { margin-bottom: 0 !important; } 
+    } 
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+  </style>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "error-container": "#fef2f2",
+            "warning": "#f59e0b",
+            "surface-container-lowest": "#ffffff",
+            "surface-container-low": "#f8fafc",
+            "surface-container": "#f1f5f9",
+            "surface-container-high": "#e2e8f0",
+            "surface-container-highest": "#cbd5e1",
+            "surface": "#ffffff",
+            "background": "#f8fafc",
+            "on-surface": "#0f172a",
+            "on-surface-variant": "#64748b",
+            "primary": "#0f172a",
+            "primary-container": "#1e293b",
+            "on-primary": "#ffffff",
+            "outline": "#e2e8f0",
+            "outline-variant": "#cbd5e1",
+            "state-attention": "#ef4444",
+            "state-executing": "#3b82f6",
+            "state-idle": "#94a3b8",
+            "status-blocked": "#f59e0b",
+            "success": "#10b981",
+            "card-bg": "#ffffff",
+            "border-subtle": "#e2e8f0"
+          },
+          fontFamily: {
+            body: ["Inter", "sans-serif"],
+            code: ["JetBrains Mono", "monospace"]
+          }
+        }
+      }
+    };
+  </script>
+</head>
+<body class="bg-background font-body text-[13px] text-on-surface select-none antialiased h-screen overflow-hidden flex flex-col">
+<!-- Native App Window Titlebar (Desktop App Shell) -->
+<header class="h-9 w-full bg-white border-b border-border-subtle flex items-center justify-between px-3 z-50 flex-none select-none">
+<div class="flex items-center gap-2">
+<!-- App Icon & Title -->
+<div class="flex items-center gap-1.5 mr-2">
+<svg class="w-4 h-4 text-slate-800" fill="currentColor" viewbox="0 0 24 24">
+<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"></path>
+</svg>
+<span class="text-[12px] font-semibold text-slate-800 tracking-tight">Tavlo</span>
+</div>
+<div class="h-3 w-px bg-slate-200"></div>
+<!-- Breadcrumb / Context Nav -->
+<nav class="flex items-center gap-2 text-[12px] ml-1">
+<span class="text-slate-400">DSH Client</span>
+<span class="text-slate-300">/</span>
+<a class="text-slate-900 font-semibold flex items-center gap-1" href="#">
+<span>任务看板</span>
+<span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+</a>
+<a class="text-slate-500 hover:text-slate-800 transition-colors ml-1" href="#">自动化流程</a>
+<a class="text-slate-500 hover:text-slate-800 transition-colors ml-1" href="#">插件扩展</a>
+</nav>
+</div>
+<!-- Right Window Controls / Status -->
+<div class="flex items-center gap-3">
+<!-- Status pill -->
+<div class="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200/80 text-[11px] text-slate-600 font-code">
+<span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+<span>har-live-01</span>
+</div>
+<!-- Avatar -->
+<img alt="Profile" class="w-5 h-5 rounded-full object-cover ring-1 ring-slate-200" src="https://lh3.googleusercontent.com/aida/ALJJyrC4eK5Hz9Qg9ncf-jI0Z9oFsCcqy-hXwxMZCQbi2sjk-6IQbTFh_kw0j4l0sjHqIaF4nRv-DdVuWUNUJoOzcjh4R9PHw4ycg-F2lXf0C9V1F7DDTnVRHTNBxYVWjmC2ZfVt0YexW4QlVds9NeU0esvAzLR7eu5OsTFCqQhHhuGrLMvJsAKu69t7otyLA_guMNNQ0XgBp9_SwBspyRDtpSMSz-I7ZNTcz1BlrsHBxkB68HlyAOfiZ075UD0"/>
+<!-- Window Minimize, Maximize, Close Buttons -->
+<div class="flex items-center ml-2 border-l border-slate-200 pl-2">
+<button class="w-6 h-6 flex items-center justify-center hover:bg-slate-100 rounded text-slate-500 hover:text-slate-800 transition-colors">
+<span class="material-symbols-outlined text-[14px]">remove</span>
+</button>
+<button class="w-6 h-6 flex items-center justify-center hover:bg-slate-100 rounded text-slate-500 hover:text-slate-800 transition-colors">
+<span class="material-symbols-outlined text-[13px]">check_box_outline_blank</span>
+</button>
+<button class="w-6 h-6 flex items-center justify-center hover:bg-red-500 hover:text-white rounded text-slate-500 transition-colors">
+<span class="material-symbols-outlined text-[14px]">close</span>
+</button>
+</div>
+</div>
+</header>
+<!-- Main Body Layout: Sidebar + Canvas -->
+<div class="flex-1 flex overflow-hidden">
+<!-- Left Navigation Sidebar (Light & Clean matching reference) -->
+<aside class="w-60 flex-none bg-[#fbfcfd] border-r border-border-subtle flex flex-col z-20">
+<!-- DeepSeek Harness Branding Header -->
+<div class="h-12 px-3 flex items-center justify-between">
+<div class="flex items-center gap-1.5">
+<svg class="w-5 h-5 text-slate-900" fill="currentColor" viewbox="0 0 24 24">
+<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"></path>
+</svg>
+<span class="font-bold text-[14px] text-slate-900 tracking-tight">deepseek</span>
+<span class="px-1.5 py-0.2 bg-slate-900 text-white rounded text-[9px] font-semibold uppercase tracking-wider font-code">HARNESS</span>
+</div>
+<button class="text-slate-400 hover:text-slate-700 p-1 rounded hover:bg-slate-100 transition-colors">
+<span class="material-symbols-outlined text-[16px]">dock_to_right</span>
+</button>
+</div>
+<!-- New Chat / Session Button -->
+<div class="px-3 py-1.5">
+<button class="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-white border border-slate-200 text-slate-800 shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:border-slate-300 hover:bg-slate-50 font-medium text-[12px] transition-all" type="button">
+<span class="material-symbols-outlined text-[15px] text-slate-600">add</span>
+<span>新会话</span>
+</button>
+</div>
+<!-- Sidebar Scrollable Nav Items -->
+<div class="flex-1 overflow-y-auto px-2 py-2 space-y-4">
+<!-- Main Core Modules -->
+<div class="space-y-0.5">
+<a class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg bg-slate-200/70 text-slate-900 font-semibold text-[12px] transition-colors" data-path="task-board" href="#">
+<span class="material-symbols-outlined text-[17px] text-slate-800">check_box</span>
+<span class="flex-1">任务看板</span>
+<span class="w-1.5 h-1.5 rounded-full bg-blue-600"></span>
+</a>
+<a class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 font-medium text-[12px] transition-colors" data-path="plugins" href="#">
+<span class="material-symbols-outlined text-[17px] text-slate-500">extension</span>
+<span class="flex-1">插件</span>
+</a>
+<a class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 font-medium text-[12px] transition-colors" data-path="automated" href="#">
+<span class="material-symbols-outlined text-[17px] text-slate-500">smart_toy</span>
+<span class="flex-1">自动化任务</span>
+</a>
+<a class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 font-medium text-[12px] transition-colors" data-path="more" href="#">
+<span class="material-symbols-outlined text-[17px] text-slate-500">grid_view</span>
+<span class="flex-1">更多</span>
+</a>
+</div>
+<!-- Workspaces Section -->
+<div class="space-y-1">
+<div class="flex items-center justify-between px-2.5 py-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+<span>工作区</span>
+<div class="flex items-center gap-1">
+<button class="text-slate-400 hover:text-slate-700"><span class="material-symbols-outlined text-[13px]">search</span></button>
+<button class="text-slate-400 hover:text-slate-700"><span class="material-symbols-outlined text-[13px]">tune</span></button>
+<button class="text-slate-400 hover:text-slate-700"><span class="material-symbols-outlined text-[13px]">add</span></button>
+</div>
+</div>
+<div class="space-y-0.5">
+<div class="flex items-center justify-between px-2.5 py-1 rounded-md text-slate-700 hover:bg-slate-100 cursor-pointer">
+<div class="flex items-center gap-2 truncate">
+<span class="material-symbols-outlined text-[15px] text-blue-500">folder</span>
+<span class="text-[12px] font-medium truncate">tavlo-dsh-plugins</span>
+</div>
+</div>
+<!-- Sub item session active in workspace -->
+<div class="pl-6 pr-2 py-1 flex items-center justify-between text-[11px] text-slate-500 hover:bg-slate-100 rounded cursor-pointer">
+<span class="truncate">设计 dsh 任务面板功能</span>
+<span class="text-[10px] text-slate-400 font-code">4分钟</span>
+</div>
+<div class="pl-6 pr-2 py-1 flex items-center justify-between text-[11px] text-slate-500 hover:bg-slate-100 rounded cursor-pointer">
+<span class="truncate">DSH 插件发布与命名问题</span>
+<span class="text-[10px] text-slate-400 font-code">22分钟</span>
+</div>
+<div class="flex items-center justify-between px-2.5 py-1 rounded-md text-slate-700 hover:bg-slate-100 cursor-pointer">
+<div class="flex items-center gap-2 truncate">
+<span class="material-symbols-outlined text-[15px] text-slate-400">folder</span>
+<span class="text-[12px] truncate">labway-ssm-front</span>
+</div>
+</div>
+<div class="flex items-center justify-between px-2.5 py-1 rounded-md text-slate-700 hover:bg-slate-100 cursor-pointer">
+<div class="flex items-center gap-2 truncate">
+<span class="material-symbols-outlined text-[15px] text-slate-400">folder</span>
+<span class="text-[12px] truncate">CLI-Manager</span>
+</div>
+</div>
+<div class="flex items-center justify-between px-2.5 py-1 rounded-md text-slate-700 hover:bg-slate-100 cursor-pointer">
+<div class="flex items-center gap-2 truncate">
+<span class="material-symbols-outlined text-[15px] text-slate-400">folder</span>
+<span class="text-[12px] truncate">deepseek-harness-ws</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Session History -->
+<div class="space-y-1">
+<div class="px-2.5 py-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+            会话历史 (M7)
+          </div>
+<div class="space-y-0.5">
+<a class="flex items-center gap-2 px-2.5 py-1 rounded-md text-slate-600 hover:bg-slate-100 text-[11px]" href="#">
+<span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+<span class="font-code truncate flex-1">dsh-runtime-fix</span>
+<span class="text-slate-400 text-[10px]">2m</span>
+</a>
+<a class="flex items-center gap-2 px-2.5 py-1 rounded-md text-slate-600 hover:bg-slate-100 text-[11px]" href="#">
+<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+<span class="font-code truncate flex-1">pipeline-sync</span>
+<span class="text-slate-400 text-[10px]">1h</span>
+</a>
+</div>
+</div>
+</div>
+<!-- Sidebar Footer Status -->
+<div class="p-2.5 border-t border-border-subtle bg-white flex items-center justify-between text-[11px]">
+<div class="flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+<span class="font-code text-slate-600">DeepSeek Core: Ready</span>
+</div>
+<button class="text-slate-400 hover:text-slate-700 p-0.5 rounded">
+<span class="material-symbols-outlined text-[15px]">tune</span>
+</button>
+</div>
+</aside>
+<!-- Main Workspace Area -->
+<main class="flex-1 flex flex-col min-w-0 bg-[#f8fafc] overflow-hidden relative">
+<!-- Top Toolbar (顶栏 §5.2) -->
+<div class="h-12 px-4 bg-white border-b border-border-subtle flex items-center justify-between flex-none z-10">
+<div class="flex items-center gap-3">
+<!-- Title & Tag -->
+<div class="flex items-center gap-2">
+<div class="w-6 h-6 rounded bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-700">
+<span class="material-symbols-outlined text-[16px]">view_kanban</span>
+</div>
+<h1 class="font-bold text-[15px] text-slate-900 tracking-tight">任务</h1>
+<span class="px-1.5 py-0.5 bg-slate-100 border border-slate-200 rounded text-slate-500 font-code text-[10px] font-medium">dsh-tasks</span>
+</div>
+<div class="h-4 w-px bg-slate-200"></div>
+<!-- Search Input Box -->
+<div class="relative flex items-center w-64">
+<span class="material-symbols-outlined absolute left-2.5 text-[15px] text-slate-400 pointer-events-none">search</span>
+<input class="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-slate-400 focus:bg-white pl-8 pr-3 py-1 rounded-md text-[12px] text-slate-800 placeholder:text-slate-400 focus:outline-none transition-all" id="task-search-input" placeholder="搜索标题或描述..." type="text"/>
+</div>
+<!-- Filter Dropdown Button -->
+<div class="relative" id="filter-container">
+<button class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium text-[12px] shadow-xs transition-colors" id="filter-btn" type="button">
+<span class="material-symbols-outlined text-[15px] text-slate-500">filter_list</span>
+<span>筛选</span>
+<span class="material-symbols-outlined text-[14px] text-slate-400">arrow_drop_down</span>
+</button>
+<!-- Dropdown Menu -->
+<div class="hidden absolute left-0 mt-1.5 w-60 p-2 rounded-lg bg-white border border-slate-200 shadow-lg z-50 flex-col gap-1.5" id="filter-menu">
+<div class="px-2 py-1 text-slate-400 font-medium text-[11px] uppercase tracking-wider">按工作区</div>
+<div class="space-y-0.5">
+<label class="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700 cursor-pointer">
+<input checked="" class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+<span>acme-web</span>
+</label>
+<label class="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700 cursor-pointer">
+<input checked="" class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+<span>tavlo-dsh-plugins</span>
+</label>
+<label class="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700 cursor-pointer">
+<input checked="" class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+<span>labway-ssm-front</span>
+</label>
+</div>
+<div class="h-px bg-slate-100 my-1"></div>
+<label class="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50 text-[12px] text-slate-700 cursor-pointer">
+<input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" id="show-cancelled-toggle" type="checkbox"/>
+<span class="text-slate-500">显示已取消任务</span>
+</label>
+</div>
+</div>
+</div>
+<!-- Actions Right -->
+<div class="flex items-center gap-2">
+<!-- Batch Mode Bar -->
+<div class="hidden items-center gap-2 bg-blue-50 border border-blue-200 px-2.5 py-1 rounded text-blue-700 text-[12px]" id="batch-stats">
+<span>已选 <b class="font-semibold text-blue-900" id="selected-count">0</b> 项</span>
+<button class="px-2 py-0.5 rounded bg-blue-600 text-white text-[11px] font-medium hover:bg-blue-700 shadow-xs" id="batch-launch-btn">开始所选</button>
+<button class="px-1 text-slate-500 hover:text-slate-800 text-[11px]" id="batch-cancel-btn">退出</button>
+</div>
+<!-- New Task Button -->
+<button class="flex items-center gap-1 px-3 py-1 bg-slate-900 text-white hover:bg-slate-800 rounded-md font-medium text-[12px] shadow-sm transition-all active:scale-95" id="new-task-btn" type="button">
+<span class="material-symbols-outlined text-[15px]">add</span>
+<span>新建任务</span>
+</button>
+<!-- Multiselect Toggle -->
+<button class="p-1.5 rounded-md bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 hover:text-slate-900 shadow-xs transition-colors" id="multiselect-toggle-btn" title="多选模式" type="button">
+<span class="material-symbols-outlined text-[16px]">checklist</span>
+</button>
+</div>
+</div>
+<!-- Global Action Alert Banner (§5.2 & §6.3 告警条 - 独立告警层) -->
+<section class="flex-none bg-[#fff5f5] border-b border-[#fee2e2] px-4 py-1.5 flex items-center justify-between text-red-700 transition-all" id="alert-banner">
+<div class="flex items-center gap-2 text-[12px]">
+<span class="material-symbols-outlined text-[16px] text-red-500">error</span>
+<span class="font-semibold text-red-800 tracking-tight">2 件事在等你</span>
+<span class="text-red-600/90">· 接入支付、补测试</span>
+</div>
+<div class="flex items-center gap-2">
+<button class="text-[11px] font-semibold px-2.5 py-0.5 bg-red-600 hover:bg-red-700 text-white rounded shadow-xs transition-colors" id="toggle-alert-list-btn">
+            [全部处理]
+          </button>
+<button class="text-red-400 hover:text-red-700 p-0.5 rounded transition-colors" id="dismiss-alert-btn">
+<span class="material-symbols-outlined text-[16px]">close</span>
+</button>
+</div>
+</section>
+<!-- Collapsible Attention Tray -->
+<div class="hidden flex-none bg-[#fef2f2] border-b border-[#fecaca] px-4 py-2.5 shadow-sm flex-col gap-2" id="alert-tray">
+<div class="flex items-center justify-between text-[12px]">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-red-500"></span>
+<span class="font-semibold text-slate-900">接入支付</span>
+<span class="text-slate-600">· 待审批: 允许修改 <code class="px-1 py-0.5 bg-white/80 rounded border border-red-200 text-red-700 font-code text-[11px]">src/pay/schema.sql</code> 结构定义</span>
+</div>
+<button class="px-2.5 py-0.5 rounded bg-white border border-red-200 hover:bg-red-50 text-red-700 font-medium text-[11px] flex items-center gap-1 shadow-xs">
+<span>打开会话</span>
+<span class="material-symbols-outlined text-[13px]">arrow_forward</span>
+</button>
+</div>
+<div class="flex items-center justify-between text-[12px]">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-amber-500"></span>
+<span class="font-semibold text-slate-900">补测试</span>
+<span class="text-slate-600">· 待回答: 确认网关超时重试窗口间隔是否保持 15s</span>
+</div>
+<button class="px-2.5 py-0.5 rounded bg-white border border-red-200 hover:bg-red-50 text-red-700 font-medium text-[11px] flex items-center gap-1 shadow-xs">
+<span>打开会话</span>
+<span class="material-symbols-outlined text-[13px]">arrow_forward</span>
+</button>
+</div>
+</div>
+<!-- Workspace Canvas Area: Kanban + Right Drawer -->
+<div class="flex-1 flex overflow-hidden relative">
+<!-- 3-Column Kanban Board (§5.2 看板主面板) -->
+<div class="flex-1 overflow-x-auto overflow-y-hidden p-4 flex gap-4 transition-all duration-300" id="board-container">
+<!-- Column 1: 待开始 (To Do) -->
+<div class="flex-1 min-w-[280px] max-w-[380px] flex flex-col bg-[#f1f5f9]/70 border border-slate-200/80 rounded-xl overflow-hidden">
+<!-- Col Header -->
+<div class="p-3 pb-2 flex items-center justify-between flex-none">
+<div class="flex items-center gap-1.5">
+<span class="font-semibold text-[13px] text-slate-800">待开始</span>
+<span class="w-4 h-4 rounded-full bg-white border border-slate-200 flex items-center justify-center font-code text-[10px] text-slate-600 font-medium shadow-xs">3</span>
+</div>
+<button class="text-slate-400 hover:text-slate-700 p-0.5 rounded hover:bg-slate-200/50 transition-colors">
+<span class="material-symbols-outlined text-[16px]">more_horiz</span>
+</button>
+</div>
+<!-- Cards List -->
+<div class="flex-1 overflow-y-auto px-2.5 py-1 space-y-2.5" id="column-todo">
+<!-- Card 1: 架构重构 RFC -->
+<div class="task-card group relative bg-white border border-border-subtle hover:border-slate-300 rounded-lg p-3 shadow-xs hover:shadow-sm transition-all duration-150 cursor-pointer overflow-hidden pl-3.5" data-stage="todo" data-task-id="t-101">
+<!-- 3px Left Semantic Derived Stripe: Unstarted (subtle gray) -->
+<div class="absolute left-0 top-0 bottom-0 w-[3px] bg-slate-300"></div>
+<!-- Checkbox for multiselect -->
+<div class="batch-checkbox hidden absolute top-2.5 left-2.5 z-10">
+<input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+</div>
+<!-- L1: Title + Hover Actions -->
+<div class="flex items-start justify-between gap-1 mb-1">
+<h2 class="font-semibold text-[13px] text-slate-900 truncate flex-1 tracking-tight">架构重构 RFC 初稿</h2>
+<div class="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity">
+<button class="launch-task-btn p-1 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors" title="启动任务">
+<span class="material-symbols-outlined text-[15px]">play_arrow</span>
+</button>
+<button class="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors" title="更多操作">
+<span class="material-symbols-outlined text-[15px]">more_vert</span>
+</button>
+</div>
+</div>
+<!-- L2: Brief (Max 2 lines) -->
+<p class="text-[12px] text-slate-500 line-clamp-2 mb-2 leading-relaxed">
+                  梳理 DSH 扩展插件沙箱上下文机制，编写 RFC 文档及时序图。
+                </p>
+<!-- L3: Derived State -->
+<div class="flex items-center gap-1.5 mb-2 text-[11px] text-slate-500">
+<span class="w-1.5 h-1.5 rounded-full border border-slate-400"></span>
+<span>未启动 · 2 天前</span>
+</div>
+<!-- L4: Metadata Bar -->
+<div class="font-code text-[11px] text-slate-400 truncate">
+                  tavlo-dsh-plugins · sonnet · 0/3
+                </div>
+</div>
+<!-- Card 2: 补充文档 -->
+<div class="task-card group relative bg-white border border-border-subtle hover:border-slate-300 rounded-lg p-3 shadow-xs hover:shadow-sm transition-all duration-150 cursor-pointer overflow-hidden pl-3.5" data-stage="todo" data-task-id="t-102">
+<div class="absolute left-0 top-0 bottom-0 w-[3px] bg-slate-300"></div>
+<div class="batch-checkbox hidden absolute top-2.5 left-2.5 z-10">
+<input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+</div>
+<div class="flex items-start justify-between gap-1 mb-1">
+<h2 class="font-semibold text-[13px] text-slate-900 truncate flex-1 tracking-tight">补充 OpenAPI 接口导出器</h2>
+<div class="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity">
+<button class="launch-task-btn p-1 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors" title="启动任务">
+<span class="material-symbols-outlined text-[15px]">play_arrow</span>
+</button>
+</div>
+</div>
+<p class="text-[12px] text-slate-500 line-clamp-2 mb-2 leading-relaxed">
+                  基于 TypeScript AST 自动抽离 RPC 路径和入参返回类型。
+                </p>
+<div class="flex items-center gap-1.5 mb-2 text-[11px] text-slate-500">
+<span class="w-1.5 h-1.5 rounded-full border border-slate-400"></span>
+<span>未启动 · 14 小时前</span>
+</div>
+<div class="font-code text-[11px] text-slate-400 truncate">
+                  labway-ssm-front · deepseek · 0/1
+                </div>
+</div>
+<!-- Card 3: 优化 CLI 日志 -->
+<div class="task-card group relative bg-white border border-border-subtle hover:border-slate-300 rounded-lg p-3 shadow-xs hover:shadow-sm transition-all duration-150 cursor-pointer overflow-hidden pl-3.5" data-stage="todo" data-task-id="t-103">
+<div class="absolute left-0 top-0 bottom-0 w-[3px] bg-slate-400"></div>
+<div class="batch-checkbox hidden absolute top-2.5 left-2.5 z-10">
+<input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+</div>
+<div class="flex items-start justify-between gap-1 mb-1">
+<h2 class="font-semibold text-[13px] text-slate-900 truncate flex-1 tracking-tight">优化 CLI 日志高亮</h2>
+<div class="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity">
+<button class="launch-task-btn p-1 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors" title="启动任务">
+<span class="material-symbols-outlined text-[15px]">play_arrow</span>
+</button>
+</div>
+</div>
+<p class="text-[12px] text-slate-500 line-clamp-2 mb-2 leading-relaxed">
+                  使用 Chalk 替换纯 ASCII 转义，支持主题色自适应输出。
+                </p>
+<div class="flex items-center gap-1.5 mb-2 text-[11px] text-slate-600">
+<span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+<span>空闲 · 昨天</span>
+</div>
+<div class="font-code text-[11px] text-slate-400 truncate">
+                  CLI-Manager · haiku · 1/2
+                </div>
+</div>
+<!-- Inline New Task Form Preview Container (§5.8) -->
+<div class="hidden bg-white border border-slate-300 rounded-lg p-2.5 shadow-sm flex-col gap-2" id="inline-create-box">
+<input class="w-full bg-slate-50 border border-slate-200 px-2 py-1 rounded text-[12px] text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white" id="inline-title-input" placeholder="任务标题..." type="text"/>
+<textarea class="w-full bg-slate-50 border border-slate-200 px-2 py-1 rounded text-[12px] text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white resize-none" id="inline-brief-input" placeholder="描述：这次要它做什么..." rows="2"></textarea>
+<div class="flex items-center justify-end gap-2 pt-1">
+<button class="px-2 py-0.5 rounded text-[11px] text-slate-500 hover:text-slate-800" id="inline-cancel-btn" type="button">取消</button>
+<button class="px-2.5 py-0.5 rounded bg-slate-900 text-white font-medium text-[11px] hover:bg-slate-800" id="inline-submit-btn" type="button">创建</button>
+</div>
+</div>
+</div>
+<!-- Col Footer: + New Inline Action -->
+<div class="p-2 flex-none border-t border-slate-200/60 bg-white/40">
+<button class="w-full py-1 flex items-center justify-center gap-1 text-slate-500 hover:text-slate-800 hover:bg-white rounded-md text-[12px] font-medium transition-colors" id="col-add-todo-btn">
+<span class="material-symbols-outlined text-[15px]">add</span>
+<span>新建</span>
+</button>
+</div>
+</div>
+<!-- Column 2: 进行中 (Doing) -->
+<div class="flex-1 min-w-[280px] max-w-[380px] flex flex-col bg-[#f1f5f9]/70 border border-slate-200/80 rounded-xl overflow-hidden">
+<!-- Col Header -->
+<div class="p-3 pb-2 flex items-center justify-between flex-none">
+<div class="flex items-center gap-1.5">
+<span class="font-semibold text-[13px] text-slate-800">进行中</span>
+<span class="w-4 h-4 rounded-full bg-blue-100 border border-blue-200 flex items-center justify-center font-code text-[10px] text-blue-700 font-semibold shadow-xs">2</span>
+</div>
+<button class="text-slate-400 hover:text-slate-700 p-0.5 rounded hover:bg-slate-200/50 transition-colors">
+<span class="material-symbols-outlined text-[16px]">more_horiz</span>
+</button>
+</div>
+<!-- Cards List -->
+<div class="flex-1 overflow-y-auto px-2.5 py-1 space-y-2.5" id="column-doing">
+<!-- Card: 接入支付 (Selected Card - Matches §5.3 & §5.4 specs) -->
+<div class="task-card group relative bg-white border border-blue-400 ring-2 ring-blue-500/10 rounded-lg p-3 shadow-xs transition-all cursor-pointer overflow-hidden pl-3.5" data-stage="doing" data-task-id="t-pay">
+<!-- 3px Left Semantic Derived Stripe: Red (待审批 - 要你动) -->
+<div class="absolute left-0 top-0 bottom-0 w-[3px] bg-red-500"></div>
+<div class="batch-checkbox hidden absolute top-2.5 left-2.5 z-10">
+<input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+</div>
+<!-- L1: Title + Blocked Badge + Quick Action -->
+<div class="flex items-start justify-between gap-1 mb-1">
+<div class="flex items-center gap-1.5 truncate flex-1">
+<h2 class="font-semibold text-[13px] text-slate-900 truncate tracking-tight">接入支付</h2>
+<span class="px-1 py-0.2 rounded bg-amber-50 border border-amber-200/80 text-amber-700 font-medium text-[10px] flex items-center gap-0.5">
+<span class="material-symbols-outlined text-[12px] text-amber-600">warning</span>
+<span>阻塞</span>
+</span>
+</div>
+<div class="flex items-center gap-1">
+<button class="p-0.5 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors" title="打开活跃会话">
+<span class="material-symbols-outlined text-[15px]">chat</span>
+</button>
+</div>
+</div>
+<!-- L2: Brief -->
+<p class="text-[12px] text-slate-600 line-clamp-2 mb-2 leading-relaxed">
+                  把支付回调改成幂等，先补测试再动老逻辑。重试窗口要对齐。
+                </p>
+<!-- L3: Derived State -->
+<div class="flex items-center gap-1.5 mb-2 text-[11px] font-medium text-red-600">
+<span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
+<span class="truncate">待审批 · 修改 schema</span>
+</div>
+<!-- L4: Metadata Bar -->
+<div class="font-code text-[11px] text-slate-400 truncate flex items-center justify-between">
+<span>acme-web · opus · 2/4</span>
+<span class="text-blue-600 font-medium">当前查看 ▸</span>
+</div>
+</div>
+<!-- Card: 补测试 -->
+<div class="task-card group relative bg-white border border-border-subtle hover:border-slate-300 rounded-lg p-3 shadow-xs hover:shadow-sm transition-all cursor-pointer overflow-hidden pl-3.5" data-stage="doing" data-task-id="t-test">
+<!-- 3px Left Semantic Derived Stripe: Red (待回答 - 要你动) -->
+<div class="absolute left-0 top-0 bottom-0 w-[3px] bg-red-500"></div>
+<div class="batch-checkbox hidden absolute top-2.5 left-2.5 z-10">
+<input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+</div>
+<div class="flex items-start justify-between gap-1 mb-1">
+<h2 class="font-semibold text-[13px] text-slate-900 truncate flex-1 tracking-tight">补测试</h2>
+<div class="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity">
+<button class="launch-task-btn p-1 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors" title="启动任务">
+<span class="material-symbols-outlined text-[15px]">play_arrow</span>
+</button>
+</div>
+</div>
+<p class="text-[12px] text-slate-500 line-clamp-2 mb-2 leading-relaxed">
+                  补全 Webhook 端点超时单测，覆盖指数退避与数据库死锁重试分支。
+                </p>
+<div class="flex items-center gap-1.5 mb-2 text-[11px] font-medium text-red-600">
+<span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+<span class="truncate">待回答 · 确认网关超时重试</span>
+</div>
+<div class="font-code text-[11px] text-slate-400 truncate">
+                  acme-web · claude · 3/5
+                </div>
+</div>
+</div>
+<div class="p-2 flex-none border-t border-slate-200/60 bg-white/40">
+<button class="w-full py-1 flex items-center justify-center gap-1 text-slate-500 hover:text-slate-800 hover:bg-white rounded-md text-[12px] font-medium transition-colors">
+<span class="material-symbols-outlined text-[15px]">add</span>
+<span>新建</span>
+</button>
+</div>
+</div>
+<!-- Column 3: 已完成 (Done §5.2) -->
+<div class="flex-1 min-w-[280px] max-w-[380px] flex flex-col bg-[#f1f5f9]/70 border border-slate-200/80 rounded-xl overflow-hidden">
+<!-- Col Header -->
+<div class="p-3 pb-2 flex items-center justify-between flex-none">
+<div class="flex items-center gap-1.5">
+<span class="font-semibold text-[13px] text-slate-800">已完成</span>
+<span class="w-4 h-4 rounded-full bg-white border border-slate-200 flex items-center justify-center font-code text-[10px] text-slate-500 font-medium shadow-xs">7</span>
+</div>
+<button class="text-slate-400 hover:text-slate-700 p-0.5 rounded hover:bg-slate-200/50 transition-colors">
+<span class="material-symbols-outlined text-[16px]">more_horiz</span>
+</button>
+</div>
+<!-- Cards List -->
+<div class="flex-1 overflow-y-auto px-2.5 py-1 space-y-2.5" id="column-done">
+<!-- Done Card 1 -->
+<div class="task-card group relative bg-white/80 border border-slate-200 hover:border-slate-300 rounded-lg p-3 shadow-xs transition-all cursor-pointer overflow-hidden pl-3.5 opacity-90 hover:opacity-100" data-stage="done" data-task-id="t-d1">
+<div class="absolute left-0 top-0 bottom-0 w-[3px] bg-slate-300"></div>
+<div class="flex items-start justify-between gap-1 mb-1">
+<h2 class="font-medium text-[13px] text-slate-500 line-through truncate flex-1 tracking-tight">集成 Tavlo 主题 Token</h2>
+<span class="material-symbols-outlined text-[16px] text-emerald-500">check_circle</span>
+</div>
+<p class="text-[12px] text-slate-400 line-clamp-2 mb-2 leading-relaxed">
+                  已完成 CSS 变量注入，统一调色板与暗色模式阶梯。
+                </p>
+<div class="flex items-center gap-1.5 mb-2 text-[11px] text-slate-400">
+<span class="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
+<span>已归档 · 3 天前</span>
+</div>
+<div class="font-code text-[11px] text-slate-400 truncate">
+                  tavlo-dsh-plugins · flash · 4/4
+                </div>
+</div>
+<!-- Done Card 2 -->
+<div class="task-card group relative bg-white/80 border border-slate-200 hover:border-slate-300 rounded-lg p-3 shadow-xs transition-all cursor-pointer overflow-hidden pl-3.5 opacity-90 hover:opacity-100" data-stage="done" data-task-id="t-d2">
+<div class="absolute left-0 top-0 bottom-0 w-[3px] bg-slate-300"></div>
+<div class="flex items-start justify-between gap-1 mb-1">
+<h2 class="font-medium text-[13px] text-slate-500 line-through truncate flex-1 tracking-tight">修复会话流内存泄露</h2>
+<span class="material-symbols-outlined text-[16px] text-emerald-500">check_circle</span>
+</div>
+<p class="text-[12px] text-slate-400 line-clamp-2 mb-2 leading-relaxed">
+                  卸载 listener 并在 window unload 时终止 worker。
+                </p>
+<div class="flex items-center gap-1.5 mb-2 text-[11px] text-slate-400">
+<span class="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
+<span>已归档 · 5 天前</span>
+</div>
+<div class="font-code text-[11px] text-slate-400 truncate">
+                  CLI-Manager · deepseek · 2/2
+                </div>
+</div>
+</div>
+<!-- Col Footer: View All Toggle -->
+<div class="p-2 flex-none border-t border-slate-200/60 bg-white/40">
+<button class="w-full py-1 text-center text-slate-500 hover:text-slate-800 text-[11px] font-medium rounded transition-colors">
+                查看全部 7 条
+              </button>
+</div>
+</div>
+</div>
+<!-- Right Pane Task Detail Drawer (§5.4 详情抽屉) -->
+<aside class="w-[410px] flex-none bg-white border-l border-border-subtle flex flex-col z-20 shadow-[-4px_0_16px_rgba(0,0,0,0.03)] transition-all duration-200" id="task-detail-drawer">
+<!-- Drawer Header & Close -->
+<div class="h-11 px-4 border-b border-border-subtle flex items-center justify-between flex-none bg-slate-50/50">
+<div class="flex items-center gap-2 text-slate-700">
+<span class="material-symbols-outlined text-[16px] text-slate-500">edit_note</span>
+<span class="font-semibold text-[12px] uppercase tracking-wider text-slate-600">任务详情</span>
+</div>
+<div class="flex items-center gap-1">
+<button class="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors" id="close-drawer-btn">
+<span class="material-symbols-outlined text-[17px]">close</span>
+</button>
+</div>
+</div>
+<!-- Drawer Scrollable Content -->
+<div class="flex-1 overflow-y-auto p-4 space-y-4">
+<!-- Section 1: Title (原地编辑) -->
+<div class="space-y-1">
+<input class="w-full bg-transparent font-bold text-[18px] text-slate-900 border-b border-transparent hover:border-slate-200 focus:border-blue-500 focus:outline-none px-1 py-0.5 rounded transition-colors" type="text" value="接入支付"/>
+</div>
+<!-- Section 2: Status Bar (stage 切换 + 标记阻塞 + 取消) -->
+<div class="flex items-center justify-between gap-2 p-2 rounded-lg bg-slate-50 border border-slate-200/70">
+<!-- Stage Picker -->
+<div class="flex items-center gap-1.5">
+<span class="text-[11px] font-medium text-slate-500">状态:</span>
+<select class="bg-white border border-slate-200 text-slate-800 text-[12px] font-medium py-1 px-2 rounded focus:outline-none focus:border-slate-400 cursor-pointer shadow-xs">
+<option value="todo">待开始</option>
+<option selected="" value="doing">进行中</option>
+<option value="done">已完成</option>
+</select>
+</div>
+<!-- Quick Action Toggles -->
+<div class="flex items-center gap-1.5">
+<button class="px-2 py-1 rounded bg-amber-50 border border-amber-200 text-amber-700 text-[11px] font-medium flex items-center gap-1 hover:bg-amber-100 transition-colors">
+<span class="material-symbols-outlined text-[13px] text-amber-600">warning</span>
+<span>已阻塞</span>
+</button>
+<button class="px-2 py-1 rounded hover:bg-slate-200/60 text-slate-500 hover:text-red-600 text-[11px] font-medium transition-colors">
+                  取消
+                </button>
+</div>
+</div>
+<!-- Section 3: Active Session (活跃对话) -->
+<div class="p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-col gap-2.5">
+<div class="flex items-center justify-between">
+<span class="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">活跃会话</span>
+<span class="font-code text-[11px] text-slate-400">sess_dsh_9921b</span>
+</div>
+<!-- Live Session Status -->
+<div class="flex items-center gap-2 py-1.5 px-2.5 rounded bg-red-50 border border-red-100 text-red-700 text-[12px]">
+<span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+<span class="font-medium">待审批 · 5 分钟前</span>
+</div>
+<!-- Session Controls -->
+<div class="flex items-center gap-2 pt-1">
+<button class="flex-1 py-1.5 px-3 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-[12px] font-medium flex items-center justify-center gap-1.5 shadow-xs transition-colors">
+<span class="material-symbols-outlined text-[15px]">chat</span>
+<span>打开对话</span>
+</button>
+<button class="py-1.5 px-3 rounded-md bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-[12px] font-medium transition-colors">
+                  换一个对话
+                </button>
+</div>
+</div>
+<!-- Section 4: Execution Instructions (brief) -->
+<div class="space-y-1.5">
+<div class="flex items-center justify-between">
+<label class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">执行说明 (Brief)</label>
+<span class="text-[11px] text-slate-400">作为首条消息发给 Agent</span>
+</div>
+<textarea class="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-lg text-[12px] text-slate-800 leading-relaxed focus:outline-none focus:border-slate-400 focus:bg-white resize-none transition-colors" rows="4">把支付回调改成幂等，先补测试再动老逻辑。现有实现见 src/pay/callback.ts，注意重试窗口要跟网关配置对齐。</textarea>
+</div>
+<!-- Section 5: Workspace Details -->
+<div class="space-y-1.5">
+<div class="flex items-center justify-between">
+<label class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">工作区</label>
+<button class="text-blue-600 hover:underline text-[11px] font-medium">更换目录</button>
+</div>
+<div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 flex flex-col gap-0.5">
+<div class="flex items-center gap-1.5 text-slate-800 text-[12px]">
+<span class="material-symbols-outlined text-[15px] text-blue-500">folder_open</span>
+<span class="font-semibold">acme-web</span>
+</div>
+<div class="font-code text-[11px] text-slate-500 break-all select-text pl-5">
+                  F:\work\acme\web
+                </div>
+</div>
+</div>
+<!-- Section 6: Model / Preset -->
+<div class="grid grid-cols-2 gap-2.5">
+<div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 space-y-1">
+<span class="font-code text-[10px] text-slate-400 uppercase">模型偏好</span>
+<div class="text-[12px] text-slate-800 font-semibold truncate">claude-opus-4</div>
+<div class="font-code text-[10px] text-slate-400">anthropic</div>
+</div>
+<div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 space-y-1">
+<span class="font-code text-[10px] text-slate-400 uppercase">Agent 预设</span>
+<div class="text-[12px] text-slate-800 font-semibold">默认执行流</div>
+<div class="font-code text-[10px] text-slate-400">preset-standard</div>
+</div>
+</div>
+<!-- Section 7: Subtasks (子任务 2/4) -->
+<div class="space-y-2">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-1.5">
+<span class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">子任务清单</span>
+<span class="px-1.5 py-0.2 rounded bg-slate-100 font-code text-[11px] text-slate-700 font-semibold">2/4</span>
+</div>
+<button class="text-blue-600 hover:underline text-[11px] font-medium flex items-center gap-0.5">
+<span class="material-symbols-outlined text-[13px]">add</span>
+<span>添加子任务</span>
+</button>
+</div>
+<!-- Progress Bar -->
+<div class="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200/60">
+<div class="w-1/2 h-full bg-blue-600 rounded-full transition-all"></div>
+</div>
+<div class="space-y-1 pt-1">
+<label class="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50 cursor-pointer text-[12px]">
+<input checked="" class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+<span class="line-through text-slate-400">梳理回调签名验签</span>
+</label>
+<label class="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50 cursor-pointer text-[12px]">
+<input checked="" class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+<span class="line-through text-slate-400">补充重试幂等单测</span>
+</label>
+<label class="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50 cursor-pointer text-[12px]">
+<input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+<span class="text-slate-800">迁移旧表 Schema (修改 schema)</span>
+</label>
+<label class="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50 cursor-pointer text-[12px]">
+<input class="rounded border-slate-300 text-slate-900 focus:ring-0 w-3.5 h-3.5" type="checkbox"/>
+<span class="text-slate-800">联调沙箱环境</span>
+</label>
+</div>
+</div>
+<!-- Section 8: History Sessions -->
+<details class="group rounded-lg bg-slate-50 border border-slate-200 p-2.5">
+<summary class="flex items-center justify-between cursor-pointer list-none text-slate-600 font-medium text-[12px]">
+<span class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[15px] text-slate-400">history</span>
+<span>历史对话 (1)</span>
+</span>
+<span class="material-symbols-outlined text-[16px] text-slate-400 group-open:rotate-180 transition-transform">expand_more</span>
+</summary>
+<div class="pt-2 space-y-1">
+<div class="flex items-center justify-between text-[11px] py-1 px-1.5 rounded hover:bg-white">
+<span class="font-code text-slate-700">#sess_9918 (前置调研)</span>
+<span class="font-code text-slate-400">2天前</span>
+</div>
+</div>
+</details>
+</div>
+</aside>
+</div>
+<!-- Floating Hover Preview Card (§5.9 悬浮信息卡) -->
+<div class="fixed top-28 left-[380px] w-80 p-3.5 rounded-xl bg-white border border-slate-200 shadow-xl z-50 pointer-events-none hidden flex-col gap-2.5 transition-opacity duration-150" id="hover-card-preview">
+<div>
+<h3 class="text-[13px] font-bold text-slate-900">接入支付</h3>
+<p class="text-[12px] text-slate-500 mt-1 leading-relaxed">
+            把支付回调改成幂等，先补测试再动老逻辑。现有实现见 src/pay/callback.ts，注意重试窗口要跟网关配置对齐。
+          </p>
+</div>
+<div class="h-px bg-slate-100"></div>
+<div class="space-y-1.5 text-[11px]">
+<div class="flex items-start justify-between">
+<span class="text-slate-400 font-code">工作区</span>
+<div class="text-right">
+<div class="font-semibold text-slate-800">acme-web</div>
+<div class="font-code text-slate-400">F:\work\acme\web</div>
+</div>
+</div>
+<div class="flex items-center justify-between">
+<span class="text-slate-400 font-code">模型 / 预设</span>
+<span class="font-code text-slate-700">claude-opus-4 · 默认</span>
+</div>
+<div class="flex items-center justify-between">
+<span class="text-slate-400 font-code">派生状态</span>
+<span class="font-medium text-red-600">待审批 · 修改 schema · 5 分钟前</span>
+</div>
+<div class="flex items-center justify-between">
+<span class="text-slate-400 font-code">子任务</span>
+<span class="font-code text-blue-600 font-semibold">2/4</span>
+</div>
+</div>
+</div>
+<!-- Launch Modal Overlay (§5.5 启动面板) -->
+<div class="hidden fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4" id="launch-modal">
+<div class="w-full max-w-[520px] bg-white border border-slate-200 rounded-xl shadow-2xl p-5 flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-150">
+<!-- Modal Header -->
+<div class="flex items-center justify-between pb-2 border-b border-slate-100">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[20px] text-blue-600">rocket_launch</span>
+<h2 class="font-bold text-[15px] text-slate-900">启动任务：补测试</h2>
+</div>
+<button class="text-slate-400 hover:text-slate-700 p-1 rounded hover:bg-slate-100" id="close-modal-btn">
+<span class="material-symbols-outlined text-[18px]">close</span>
+</button>
+</div>
+<!-- Settings Dropdowns (Workspace / Model / Preset) -->
+<div class="grid grid-cols-3 gap-2.5">
+<div class="space-y-1">
+<label class="font-code text-[10px] text-slate-400 uppercase font-semibold">工作区</label>
+<select class="w-full bg-slate-50 border border-slate-200 px-2.5 py-1.5 rounded-md text-[12px] text-slate-800 focus:outline-none focus:border-slate-400 cursor-pointer">
+<option selected="">acme-web</option>
+<option>tavlo-dsh-plugins</option>
+</select>
+</div>
+<div class="space-y-1">
+<label class="font-code text-[10px] text-slate-400 uppercase font-semibold">模型</label>
+<select class="w-full bg-slate-50 border border-slate-200 px-2.5 py-1.5 rounded-md text-[12px] text-slate-800 focus:outline-none focus:border-slate-400 cursor-pointer">
+<option selected="">claude-opus-4</option>
+<option>deepseek-v4.1-flash</option>
+</select>
+</div>
+<div class="space-y-1">
+<label class="font-code text-[10px] text-slate-400 uppercase font-semibold">预设</label>
+<select class="w-full bg-slate-50 border border-slate-200 px-2.5 py-1.5 rounded-md text-[12px] text-slate-800 focus:outline-none focus:border-slate-400 cursor-pointer">
+<option selected="">默认</option>
+<option>单测生成专家</option>
+</select>
+</div>
+</div>
+<!-- First Prompt Box -->
+<div class="space-y-1.5">
+<div class="flex items-center justify-between">
+<label class="text-[11px] font-semibold text-slate-600">首条消息 (拼接标题与执行说明)</label>
+<span class="font-code text-[10px] text-slate-400">⌘ + Enter 快速启动</span>
+</div>
+<textarea class="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-lg text-[12px] text-slate-800 leading-relaxed focus:outline-none focus:border-slate-400 focus:bg-white resize-none" rows="4">补测试
+
+补全 Webhook 端点超时单测，覆盖指数退避与数据库死锁重试分支。</textarea>
+</div>
+<!-- Modal Footer -->
+<div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+<button class="px-3 py-1.5 rounded-md text-[12px] font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100" id="cancel-modal-btn" type="button">取消</button>
+<button class="px-4 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium text-[12px] flex items-center gap-1.5 shadow-sm transition-colors" id="confirm-launch-btn" type="button">
+<span class="material-symbols-outlined text-[15px]">play_arrow</span>
+<span>开始</span>
+</button>
+</div>
+</div>
+</div>
+</main>
+</div>
+<!-- Client-side Interactive Wiring -->
+<script>
+    (function initTaskBoard() {
+      // 1. Alert Banner Toggle
+      const alertBtn = document.getElementById('toggle-alert-list-btn');
+      const alertTray = document.getElementById('alert-tray');
+      const dismissAlert = document.getElementById('dismiss-alert-btn');
+      const alertBanner = document.getElementById('alert-banner');
+
+      if (alertBtn && alertTray) {
+        alertBtn.addEventListener('click', () => {
+          alertTray.classList.toggle('hidden');
+          alertTray.classList.toggle('flex');
+        });
+      }
+
+      if (dismissAlert && alertBanner) {
+        dismissAlert.addEventListener('click', () => {
+          alertBanner.classList.add('hidden');
+          if (alertTray) alertTray.classList.add('hidden');
+        });
+      }
+
+      // 2. Filter Menu Toggle
+      const filterBtn = document.getElementById('filter-btn');
+      const filterMenu = document.getElementById('filter-menu');
+      if (filterBtn && filterMenu) {
+        filterBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          filterMenu.classList.toggle('hidden');
+          filterMenu.classList.toggle('flex');
+        });
+        document.addEventListener('click', () => {
+          filterMenu.classList.add('hidden');
+        });
+      }
+
+      // 3. Multi-Select Batch Mode Toggle (§5.6)
+      const multiselectBtn = document.getElementById('multiselect-toggle-btn');
+      const batchStats = document.getElementById('batch-stats');
+      const batchBoxes = document.querySelectorAll('.batch-checkbox');
+      const batchCancelBtn = document.getElementById('batch-cancel-btn');
+      let isMultiSelect = false;
+
+      function setMultiSelect(enable) {
+        isMultiSelect = enable;
+        batchStats.classList.toggle('hidden', !enable);
+        batchStats.classList.toggle('flex', enable);
+        batchBoxes.forEach(box => {
+          box.classList.toggle('hidden', !enable);
+        });
+      }
+
+      if (multiselectBtn) {
+        multiselectBtn.addEventListener('click', () => setMultiSelect(!isMultiSelect));
+      }
+      if (batchCancelBtn) {
+        batchCancelBtn.addEventListener('click', () => setMultiSelect(false));
+      }
+
+      // 4. Inline Create Task (§5.8)
+      const addBtn = document.getElementById('col-add-todo-btn');
+      const inlineBox = document.getElementById('inline-create-box');
+      const inlineCancel = document.getElementById('inline-cancel-btn');
+      const inlineSubmit = document.getElementById('inline-submit-btn');
+      const inlineTitle = document.getElementById('inline-title-input');
+
+      if (addBtn && inlineBox) {
+        addBtn.addEventListener('click', () => {
+          inlineBox.classList.remove('hidden');
+          inlineBox.classList.add('flex');
+          inlineTitle.focus();
+        });
+      }
+      if (inlineCancel && inlineBox) {
+        inlineCancel.addEventListener('click', () => {
+          inlineBox.classList.add('hidden');
+          inlineBox.classList.remove('flex');
+        });
+      }
+
+      // 5. Drawer Close Toggle
+      const closeDrawerBtn = document.getElementById('close-drawer-btn');
+      const drawer = document.getElementById('task-detail-drawer');
+      if (closeDrawerBtn && drawer) {
+        closeDrawerBtn.addEventListener('click', () => {
+          drawer.classList.toggle('hidden');
+        });
+      }
+
+      // Card click opens drawer
+      const cards = document.querySelectorAll('.task-card');
+      cards.forEach(card => {
+        card.addEventListener('click', (e) => {
+          if (e.target.closest('button') || e.target.closest('input')) return;
+          if (drawer) drawer.classList.remove('hidden');
+        });
+      });
+
+      // 6. Launch Modal (§5.5)
+      const launchModal = document.getElementById('launch-modal');
+      const launchBtns = document.querySelectorAll('.launch-task-btn');
+      const closeModalBtn = document.getElementById('close-modal-btn');
+      const cancelModalBtn = document.getElementById('cancel-modal-btn');
+      const confirmLaunchBtn = document.getElementById('confirm-launch-btn');
+
+      function openModal() {
+        if (launchModal) launchModal.classList.remove('hidden');
+      }
+      function closeModal() {
+        if (launchModal) launchModal.classList.add('hidden');
+      }
+
+      launchBtns.forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openModal();
+      }));
+
+      if (closeModalBtn) closeModalBtn.addEventListener('click', closeModal);
+      if (cancelModalBtn) cancelModalBtn.addEventListener('click', closeModal);
+      if (confirmLaunchBtn) {
+        confirmLaunchBtn.addEventListener('click', () => {
+          confirmLaunchBtn.innerHTML = '<span class="material-symbols-outlined text-[15px] animate-spin">refresh</span> 启动中...';
+          setTimeout(() => {
+            closeModal();
+            confirmLaunchBtn.innerHTML = '<span class="material-symbols-outlined text-[15px]">play_arrow</span> 开始';
+          }, 600);
+        });
+      }
+
+      // 7. Instant Search Filter
+      const searchInput = document.getElementById('task-search-input');
+      if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+          const val = e.target.value.toLowerCase().trim();
+          cards.forEach(card => {
+            const text = card.textContent.toLowerCase();
+            card.style.display = text.includes(val) ? '' : 'none';
+          });
+        });
+      }
+    })();
+  </script>
+</body></html>

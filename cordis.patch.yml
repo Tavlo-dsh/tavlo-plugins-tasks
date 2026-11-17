@@ -1,0 +1,12 @@
+# 任务看板：Host 任务存储与 Web 面板。
+- insert:
+    - id: tavlo-tasks
+      name: dsh-plugin-tasks
+      config:
+        maxTitleLength: 200
+        maxBriefLength: 20000
+        maxTasks: 10000
+        maxLaunchesPerTask: 1000
+        statusRefreshMs: 2000
+        eventBufferBytes: 33554432
+        eventHeartbeatMs: 15000

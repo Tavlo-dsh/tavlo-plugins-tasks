@@ -1,0 +1,17 @@
+{
+  "meta": {
+    "title": "Task board",
+    "description": "Turn things you need to do into cards you can launch into a conversation and watch the live status of."
+  },
+  "panel": {
+    "title": "Tasks",
+    "newTask": "New task",
+    "emptyTodo": "Nothing waiting",
+    "emptyDoing": "Nothing running",
+    "emptyDone": "Nothing finished yet",
+    "columnTodo": "To do",
+    "columnDoing": "In progress",
+    "columnDone": "Done",
+    "search": "Search title or description…"
+  }
+}
