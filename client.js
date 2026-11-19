@@ -558,16 +558,13 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root {
   --dsh-tasks-fibre: url("${PAPER_FIBRE}");
   color: var(--dsh-tasks-ink);
   background-color: var(--dsh-tasks-desk);
-  background-image: var(--dsh-tasks-fibre), repeating-linear-gradient(0deg, transparent 0 2px, #ffffff0a 2px 3px), repeating-linear-gradient(90deg, transparent 0 2px, #29423408 2px 3px);
-  background-size: 240px 240px, 3px 3px, 3px 3px;
+  background-image: none;
   font-family: inherit; min-width: 0; isolation: isolate;
-  background-blend-mode: var(--dsh-tasks-texture-blend, normal);
-  & :is(.dsh-tasks-toolbar, .dsh-tasks-col, .dsh-tasks-card, .dsh-tasks-dialog) { background-blend-mode: var(--dsh-tasks-texture-blend, normal); }
   & .dsh-tasks-toolbar {
     margin: 14px 18px 0; padding: 12px 16px; gap: 12px;
-    border: 1px solid color-mix(in srgb, var(--dsh-tasks-line) 45%, transparent); border-radius: 1px 3px 2px 1px;
-    background-color: var(--dsh-tasks-paper); background-image: var(--dsh-tasks-slip); background-size: 128px 128px;
-    box-shadow: 0 2px 3px var(--dsh-tasks-shadow), 0 7px 16px -10px var(--dsh-tasks-shadow);
+    border: 1px solid var(--dsh-paper-border); border-radius: 6px;
+    background: var(--dsh-tasks-paper);
+    box-shadow: 0 2px 8px -4px var(--dsh-tasks-shadow);
     position: relative; z-index: 5;
   }
   & .dsh-tasks-title { font-size: 21px; font-weight: 650; letter-spacing: .06em; white-space: nowrap; }
@@ -580,9 +577,9 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root {
     position: relative; overflow: visible; border-radius: 2px 1px 3px 1px;
     border: 1px solid color-mix(in srgb, var(--dsh-tasks-line) 65%, transparent);
     background-color: var(--dsh-tasks-sheet);
-    background-image: var(--dsh-tasks-slip), repeating-linear-gradient(0deg, transparent 0 27px, var(--dsh-tasks-rule) 27px 28px);
-    background-size: 128px 128px, 100% 28px;
-    box-shadow: 1px 2px 2px var(--dsh-tasks-shadow), 0 9px 15px -7px var(--dsh-tasks-shadow);
+    background-image: repeating-linear-gradient(0deg, transparent 0 27px, var(--dsh-tasks-rule) 27px 28px), linear-gradient(var(--dsh-paper-sheetWash, transparent), var(--dsh-paper-sheetWash, transparent)), var(--dsh-tasks-slip);
+    background-size: 100% 28px, auto, 128px 128px;
+    box-shadow: 0 3px 0 -1px var(--dsh-paper-edge, var(--dsh-tasks-line)), 0 4px 0 -1px var(--dsh-tasks-line), 0 8px 16px -8px var(--dsh-tasks-shadow);
     min-width: 270px; max-width: none;
   }
   & .dsh-tasks-col::before {
@@ -590,24 +587,30 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root {
     background: var(--dsh-tasks-fibre), var(--dsh-tasks-tape); background-size: 160px 160px; transform: rotate(-4deg); pointer-events: none;
     clip-path: polygon(2% 0, 99% 3%, 97% 20%, 100% 40%, 98% 65%, 100% 99%, 1% 96%, 3% 75%, 0 54%, 2% 28%);
   }
-  & .dsh-tasks-col[data-stage="doing"]::before { transform: rotate(3deg); }
-  & .dsh-tasks-col[data-stage="done"]::before { transform: rotate(-2deg); }
+  & .dsh-tasks-col[data-stage="doing"]::before { transform: rotate(3deg); background-color: var(--dsh-paper-tapeInfo, var(--dsh-tasks-tape)); }
+  & .dsh-tasks-col[data-stage="done"]::before { transform: rotate(-2deg); background-color: var(--dsh-paper-tapeSuccess, var(--dsh-tasks-tape)); }
   & .dsh-tasks-colhead { padding: 22px 16px 13px; }
   & .dsh-tasks-coltitle { min-height: 28px; gap: 10px; }
   & .dsh-tasks-colname { font-size: 16px; letter-spacing: .05em; position: relative; isolation: isolate; }
   & .dsh-tasks-colname::before { content: ''; position: absolute; z-index: -1; inset: 35% -5px 0 -3px; background: var(--dsh-tasks-highlight); border-radius: 35% 12% 20% 8% / 22% 30% 35% 38%; transform: rotate(-2deg); pointer-events: none; }
-  & .dsh-tasks-col[data-stage="doing"] .dsh-tasks-colname::before { background: var(--dsh-paper-infoSoft); }
-  & .dsh-tasks-col[data-stage="done"] .dsh-tasks-colname::before { background: var(--dsh-paper-successSoft); }
+  & .dsh-tasks-col[data-stage="doing"] .dsh-tasks-colname::before { background: var(--dsh-paper-markerInfo, var(--dsh-paper-infoSoft)); }
+  & .dsh-tasks-col[data-stage="done"] .dsh-tasks-colname::before { background: var(--dsh-paper-markerSuccess, var(--dsh-paper-successSoft)); }
   & .dsh-tasks-count { color: var(--dsh-tasks-muted); background: transparent; border: 0; padding: 0; font-size: 12px; }
   & .dsh-tasks-collist { padding: 4px 12px 8px; }
   & .dsh-tasks-card {
-    padding: 14px; margin-bottom: 13px; color: var(--dsh-tasks-ink);
+    position: relative; padding: 14px; margin-bottom: 13px; color: var(--dsh-tasks-ink);
     border: 1px solid color-mix(in srgb, var(--dsh-tasks-line) 55%, transparent); border-radius: 2px 4px 3px 1px;
-    background-color: var(--dsh-tasks-paper); background-image: var(--dsh-tasks-fibre), var(--dsh-tasks-slip);
-    background-size: 240px 240px, 128px 128px; background-position: var(--dsh-tasks-paper-x) var(--dsh-tasks-paper-y);
-    box-shadow: 1px 2px 2px var(--dsh-tasks-shadow), 0 5px 8px -5px var(--dsh-tasks-shadow);
+    background-color: var(--dsh-paper-card, var(--dsh-tasks-paper));
+    background-image: linear-gradient(var(--dsh-paper-cardWash, transparent), var(--dsh-paper-cardWash, transparent)), var(--dsh-tasks-fibre), var(--dsh-tasks-slip);
+    background-size: auto, 240px 240px, 128px 128px; background-position: var(--dsh-tasks-paper-x) var(--dsh-tasks-paper-y);
+    box-shadow: 0 2px 0 -1px var(--dsh-paper-edge, var(--dsh-tasks-line)), 1px 3px 0 -1px var(--dsh-tasks-line), 0 7px 12px -6px var(--dsh-tasks-shadow);
   }
-  & .dsh-tasks-card:hover { border-color: var(--dsh-tasks-line); box-shadow: 1px 2px 3px var(--dsh-tasks-shadow), 0 6px 10px -5px var(--dsh-tasks-shadow); }
+  & .dsh-tasks-card::before {
+    content: ''; position: absolute; top: -1px; right: -1px; width: 12px; height: 12px; pointer-events: none;
+    background: linear-gradient(225deg, var(--dsh-tasks-sheet) 48%, var(--dsh-tasks-line) 49% 52%, var(--dsh-paper-edge, var(--dsh-tasks-paper)) 53%);
+    border-radius: 0 3px 0 2px;
+  }
+  & .dsh-tasks-card:hover { border-color: var(--dsh-tasks-focus); }
   & .dsh-tasks-card-title { font-size: 14px; line-height: 24px; letter-spacing: .01em; }
   & .dsh-tasks-card[data-stage="done"] .dsh-tasks-card-title { color: var(--dsh-tasks-muted); text-decoration-color: color-mix(in srgb, var(--dsh-tasks-muted) 65%, transparent); }
   & :is(.dsh-tasks-card-brief, .dsh-tasks-card-meta, .dsh-tasks-card-state, .dsh-tasks-menu-label, .dsh-tasks-field-hint, .dsh-tasks-draft-hint, .dsh-tasks-optional, .dsh-tasks-detail-grid dt) { color: var(--dsh-tasks-muted); }
@@ -621,8 +624,9 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root {
   & [data-task-status="idle"] .dsh-tasks-status-label { color: var(--dsh-paper-success); background: var(--dsh-paper-successSoft); }
   & .dsh-tasks-dot { border-color: currentColor; width: 6px; height: 6px; }
   & :is(.dsh-tasks-primary, .dsh-tasks-secondary, .dsh-tasks-retry) { min-height: 30px; height: auto; box-sizing: border-box; padding: 4px 10px; border: 1px solid var(--dsh-tasks-line); border-radius: 3px 5px 2px 4px; color: var(--dsh-tasks-ink); background: var(--dsh-tasks-paper); box-shadow: 1px 1px 0 color-mix(in srgb, var(--dsh-tasks-line) 55%, transparent); }
-  & .dsh-tasks-primary { background: var(--dsh-tasks-highlight); border-color: var(--dsh-paper-warning); font-weight: 600; }
-  & :is(.dsh-tasks-primary, .dsh-tasks-secondary, .dsh-tasks-retry):hover:not(:disabled) { background: color-mix(in srgb, var(--dsh-tasks-highlight) 40%, var(--dsh-tasks-paper)); opacity: 1; }
+  & .dsh-tasks-primary { background: var(--dsh-paper-accent); color: var(--dsh-paper-onAccent); border-color: var(--dsh-paper-accent); font-weight: 600; box-shadow: none; }
+  & :is(.dsh-tasks-secondary, .dsh-tasks-retry):hover:not(:disabled) { background: var(--dsh-paper-accentSoft); border-color: var(--dsh-tasks-focus); opacity: 1; }
+  & .dsh-tasks-primary:hover:not(:disabled) { background: var(--dsh-paper-accentHover); border-color: var(--dsh-paper-accentHover); opacity: 1; }
   & .dsh-tasks-card-buttons { flex-wrap: wrap; border-top: 1px dashed var(--dsh-tasks-rule); padding-top: 10px; }
   & .dsh-tasks-icon-button { color: var(--dsh-tasks-muted); min-width: 26px; min-height: 26px; }
   & .dsh-tasks-icon-button:hover { color: var(--dsh-tasks-ink); background: color-mix(in srgb, var(--dsh-tasks-highlight) 35%, transparent); }
@@ -640,7 +644,8 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root {
   & .dsh-tasks-footnote { padding: 0 24px 13px; color: var(--dsh-paper-muted); }
   & .dsh-tasks-menu { color: var(--dsh-tasks-ink); background: var(--dsh-tasks-paper); border-color: var(--dsh-tasks-line); border-radius: 2px 4px 1px 3px; }
   & .dsh-tasks-menu button:hover { background: var(--dsh-tasks-highlight); }
-  & .dsh-tasks-dialog { background-color: var(--dsh-tasks-paper); background-image: var(--dsh-tasks-slip); background-size: 128px 128px; color: var(--dsh-tasks-ink); border: 1px solid var(--dsh-tasks-line); border-radius: 2px 6px 2px 3px; }
+  & .dsh-tasks-dialog { background: var(--dsh-tasks-paper); color: var(--dsh-tasks-ink); border: 1px solid var(--dsh-tasks-line); border-radius: 2px 6px 2px 3px; }
+  & .dsh-tasks-select-list { background-image: none; }
   & .dsh-tasks-dialog::backdrop { background: rgb(24 23 21 / 22%); }
   & .dsh-tasks-dialog-head h2 { background: linear-gradient(transparent 55%, var(--dsh-tasks-highlight) 55% 90%, transparent 90%); width: fit-content; }
   & .dsh-tasks-dialog-head p { color: var(--dsh-tasks-muted); }
@@ -650,7 +655,8 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root {
   & :is(input, textarea, .dsh-tasks-select-trigger):focus { outline: none; box-shadow: none; border-color: var(--dsh-tasks-focus); }
   & .dsh-tasks-menu .dsh-tasks-danger, & .dsh-tasks-danger { color: var(--dsh-paper-danger); }
   & .dsh-tasks-menu .dsh-tasks-danger { border-top: 1px dashed var(--dsh-tasks-rule); margin-top: 5px; padding-top: 10px; }
-  & .dsh-tasks-danger.dsh-tasks-primary { background: var(--dsh-paper-dangerSoft); border-color: var(--dsh-paper-danger); }
+  & .dsh-tasks-danger.dsh-tasks-primary { background: var(--dsh-paper-dangerSoft); border-color: var(--dsh-paper-danger); color: var(--dsh-paper-danger); }
+  & .dsh-tasks-danger.dsh-tasks-primary:hover:not(:disabled) { background: var(--dsh-paper-dangerSoft); border-color: var(--dsh-paper-danger); }
   & .dsh-tasks-delete-title { font-weight: 600; overflow-wrap: anywhere; }
   & .dsh-tasks-filter .dsh-tasks-menu { min-width: 220px; max-width: calc(100vw - 40px); }
   & button:disabled { opacity: .55; box-shadow: none; cursor: default; }
@@ -671,11 +677,9 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root {
   }
   @media (pointer: coarse) { & :is(button, summary, select, .dsh-tasks-search) { min-height: 44px; } & .dsh-tasks-card-actions > summary { min-width: 44px; } }
   @media (prefers-reduced-motion: reduce) { & * { transition: none; } }
-  @media (forced-colors: active) { & { background: Canvas; color: CanvasText; } & :is(.dsh-tasks-toolbar, .dsh-tasks-col, .dsh-tasks-card, .dsh-tasks-dialog, .dsh-tasks-status-label, .dsh-tasks-attention) { background: Canvas; color: CanvasText; border: 1px solid CanvasText; box-shadow: none; } & :is(.dsh-tasks-col, .dsh-tasks-colname)::before { display: none; } & :is(button, input, textarea, select, summary):focus-visible { outline-color: Highlight; } }
+  @media (forced-colors: active) { & { background: Canvas; color: CanvasText; } & :is(.dsh-tasks-toolbar, .dsh-tasks-col, .dsh-tasks-card, .dsh-tasks-dialog, .dsh-tasks-status-label, .dsh-tasks-attention) { background: Canvas; color: CanvasText; border: 1px solid CanvasText; box-shadow: none; } & :is(.dsh-tasks-col, .dsh-tasks-colname, .dsh-tasks-card)::before { display: none; } & :is(button, input, textarea, select, summary):focus-visible { outline-color: Highlight; } }
 }
 `
-
-    const PAPER_DARK_CSS = 'body[data-ds-dark-theme][data-dsh-paper-theme="paper"] .dsh-tasks-root { --dsh-tasks-texture-blend: soft-light; }'
 
     function avalanche(h) {
       h ^= h >>> 16
@@ -1491,7 +1495,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root {
      * @returns the style element.
      */
     function Styles() {
-      return h('style', { 'data-dsh-tasks': '' }, CSS + CONTROLS_CSS + PAPER_CSS + PAPER_DARK_CSS)
+      return h('style', { 'data-dsh-tasks': '' }, CSS + CONTROLS_CSS + PAPER_CSS)
     }
 
     /**

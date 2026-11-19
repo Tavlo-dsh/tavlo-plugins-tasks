@@ -55,8 +55,10 @@ utils → clsx + tailwind-merge
 | 原文件 / 完整 SHA-256 | 摘取范围与真实运行依赖 | 本地位置与修改 |
 | --- | --- | --- |
 | `src/lib/ink/rng.ts`<br>`aadd28b9a9430a127238668d584ebbd600a73d26311ca2c4a908835bdc5f6251` | `avalanche` 与 `hashSeed` 的字符串分支，只依赖 Math | 本地 `paperSeed(task.id + ':paper')` 生成稳定背景偏移；无时间、随机挂载 ID、缓存或观察器 |
-| `src/lib/ink/textures-paper.generated.ts` 的 `PAPER_SLIP.uri` | PNG 20,322 字节，256×256，CSS 平铺 128×128 | 原 URI 直接内嵌，应用于纸页、卡片、工具栏和弹框；PNG SHA-256：`d482ca23ac111d544bb6b6fb7803cee88e25d7c72d93d94482991d6dc96f1694` |
+| `src/lib/ink/textures-paper.generated.ts` 的 `PAPER_SLIP.uri` | PNG 20,322 字节，256×256，CSS 平铺 128×128 | 原 URI 直接内嵌；当前只应用于纸页与卡片，通过共享 wash token 降低强度，工具栏、弹框和选择浮层保持干净底色；PNG SHA-256：`d482ca23ac111d544bb6b6fb7803cee88e25d7c72d93d94482991d6dc96f1694` |
 | 同文件的 `PAPER_FIBRE.uri` | PNG 3,525 字节，480×480，CSS 平铺 240×240 | 原 URI 直接内嵌，作为纤维层；PNG SHA-256：`62e0029469c1f1523a6682d0a56e8e44a02de9ba00bdb197882806185958bcd9` |
+
+配合全局主题 0.1.2 的展示调整仅改变 CSS 叠层、纸边和色板，不修改 PNG 内容、平铺尺寸与复制范围。移除看板全幅纤维和深色统一 soft-light 混合，深色通过更亮的卡纸与纸边体现层次，详见 [配色与材质更新](paper-material-refinement.md)。
 
 其余文件仅作为视觉规则参考，不能误记为已经移植：
 
