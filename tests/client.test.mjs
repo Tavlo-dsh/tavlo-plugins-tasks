@@ -1,7 +1,30 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { setImmediate } from 'node:timers/promises'
+import { runInNewContext } from 'node:vm'
+import React from 'react'
+import ReactDOM from 'react-dom'
 import { callTask, emptyList, memorySessionStorage, mountClient, mountHost, waitForState } from './fixtures.mjs'
+
+test('exported browser bundle activates its factory with only DSH modules', async () => {
+  const url = new URL(import.meta.resolve('@tavlo-dsh/dsh-plugin-tasks/client'))
+  const modules = new Map([
+    ['react', React],
+    ['react-dom', ReactDOM],
+    ['@deepseek-ai/dsh-client-ui-primitives', { useModalLayer() {} }],
+  ])
+  let definition
+  const window = { __ModuleLoader__: { load({ id, factory }) {
+    assert.equal(id, '@tavlo-dsh/dsh-plugin-tasks')
+    definition = factory(name => {
+      assert(modules.has(name), `Missing DSH module: ${name}`)
+      return modules.get(name)
+    })
+  } } }
+  runInNewContext(await readFile(url, 'utf8'), { window }, { filename: url.pathname })
+  assert.equal(typeof definition?.apply, 'function')
+})
 
 test('shipped browser factory reads the list over real authenticated HTTP', async t => {
   const host = await mountHost(t)
@@ -12,7 +35,7 @@ test('shipped browser factory reads the list over real authenticated HTTP', asyn
   assert(rendered.includes('暂无任务。'))
   assert.equal(rendered.find(node => node.type === 'div').props['aria-busy'], false)
   assert(!rendered.some(node => node.props?.className === 'dsh-tasks-retry'))
-  assert.equal(rendered.find(node => node.props?.className === 'dsh-tasks-primary').props.disabled, false)
+  assert(!rendered.find(node => node.type === 'button' && node.props['aria-label'] === '新建任务').props.disabled)
 })
 
 test('loading state and duplicate refresh share one pending RPC', async t => {
@@ -132,11 +155,309 @@ const record = (overrides = {}) => ({
   ...overrides,
 })
 
+const parentSession = 'session-11111111-1111-4111-8111-111111111111'
+const childSession = 'session-22222222-2222-4222-8222-222222222222'
+const namedButton = (client, name) => client.render().find(el => el.type === 'button' && el.props.children === name)
+
+test('unknown passive status allows a blank conversation request but never a Fork', async t => {
+  const task = record({ activeSessionId: parentSession }), launches = []
+  const client = await mountClient(t, { async call(_channel, _endpoint, { operation, input }) {
+    if (operation === 'list') return { ok: true, value: { tasks: [task] } }
+    if (operation === 'options') return { ok: true, value: { ...emptyOptions().value, canFork: true } }
+    assert.equal(operation, 'launch')
+    launches.push(input)
+    return { ok: false, error: { code: 'tasks/session-busy' } }
+  } })
+  await waitForState(client.tasks, 'ready')
+  client.tasks.openDetails(task.id)
+  namedButton(client, '新开一个对话').props.onClick()
+  await until(() => client.tasks.getSnapshot().options.status === 'ready')
+  const rendered = client.render()
+  assert.equal(namedButton(client, '新建并启动')?.props.disabled, false)
+  assert(rendered.some(el => el.type === 'textarea' && el.props.name === 'content'))
+  assert.equal(rendered.filter(el => el === '原对话状态暂不可用，创建前会重新检查。').length, 1)
+  assert(rendered.find(el => el.type === 'input' && el.props.value === 'fork').props.disabled)
+  client.tasks.editLaunch('forkFromSessionId', parentSession)
+  await client.tasks.launchTask()
+  assert.equal(launches.length, 0)
+  client.tasks.editLaunch('forkFromSessionId', undefined)
+  rendered.find(el => el.type === 'form' && el.props.className === 'dsh-tasks-form').props.onSubmit({ preventDefault() {} })
+  await until(() => client.tasks.getSnapshot().launchForm.errorCode === 'tasks/session-busy')
+  assert.equal(launches.length, 1)
+  assert.equal(launches[0].replaceActive, true)
+  assert.equal(launches[0].forkFromSessionId, undefined)
+  assert(client.render().includes('已有对话正在执行或等待输入，请打开对话继续。'))
+})
+
+for (const status of ['running', 'approval', 'question']) test(`new conversation cannot submit while the source is ${status}`, async t => {
+  const task = record({ activeSessionId: parentSession }), launches = []
+  const client = await mountClient(t, { async call(_channel, _endpoint, { operation, input }) {
+    if (operation === 'list') return { ok: true, value: { tasks: [task] } }
+    if (operation === 'options') return emptyOptions()
+    launches.push(input)
+    throw new Error('Busy conversation must not be submitted')
+  } }, { fetch: async (_url, { signal }) => new Response(new ReadableStream({ start(controller) {
+    const baseline = { type: 'snapshot', streamId: 'busy-source', sequence: 0, tasks: [task], statuses: { [task.id]: { sessionId: parentSession, status } } }
+    controller.enqueue(new TextEncoder().encode(`event: tasks\ndata: ${JSON.stringify(baseline)}\n\n`))
+    signal.addEventListener('abort', () => controller.close(), { once: true })
+  } }), { headers: { 'content-type': 'text/event-stream' } }) })
+  await until(() => client.tasks.getSnapshot().sync === 'live')
+  client.tasks.openDetails(task.id)
+  namedButton(client, '新开一个对话').props.onClick()
+  assert.equal(namedButton(client, '新建并启动')?.props.disabled, true)
+  await client.tasks.launchTask()
+  assert.deepEqual(launches, [])
+})
+
+for (const phase of ['forking', 'created']) test(`lost Fork reply checks the ${phase} receipt before any further action`, async t => {
+  let task = record({ activeSessionId: parentSession }), saved, canFork = false
+  const operations = []
+  const client = await mountClient(t, { async call(_channel, _endpoint, { operation, input }) {
+    if (operation === 'list') return { ok: true, value: { tasks: [task] } }
+    if (operation === 'options') return { ok: true, value: { ...emptyOptions().value, canFork } }
+    operations.push(operation)
+    if (operation === 'launch') {
+      saved = input
+      task = { ...task, revision: 2, launch: { phase, input, ...(phase === 'created' ? { sessionId: childSession } : {}) } }
+      throw new Error('Reply lost')
+    }
+    if (operation === 'get') return { ok: true, value: { task } }
+    assert.equal(input.requestId, saved.requestId)
+    assert.equal(input.taskId, task.id)
+    if (operation === 'resume-launch') return { ok: true, value: { sessionId: childSession, task: { ...task, activeSessionId: childSession, revision: 3, launch: { ...task.launch, phase: 'complete' } } } }
+    assert.equal(operation, 'abandon-launch')
+    return { ok: true, value: { task: { ...task, revision: 3, launch: { ...task.launch, phase: 'abandoned' } } } }
+  } }, { fetch: async (_url, { signal }) => new Response(new ReadableStream({ start(controller) {
+    const baseline = { type: 'snapshot', streamId: 'synthetic', sequence: 0, tasks: [task], statuses: { [task.id]: { sessionId: parentSession, status: 'archived' } } }
+    controller.enqueue(new TextEncoder().encode(`event: tasks\ndata: ${JSON.stringify(baseline)}\n\n`))
+    signal.addEventListener('abort', () => controller.close(), { once: true })
+  } }), { headers: { 'content-type': 'text/event-stream' } }) })
+  const state = () => client.tasks.getSnapshot()
+  await until(() => state().sync === 'live')
+  client.tasks.openDetails(task.id)
+  namedButton(client, '新开一个对话').props.onClick()
+  await until(() => state().options.status === 'ready')
+  const radio = value => client.render().find(el => el.type === 'input' && el.props.type === 'radio' && el.props.value === value)
+  assert(radio('blank').props.checked)
+  assert(radio('fork').props.disabled)
+  canFork = true
+  await client.tasks.loadOptions()
+  assert.equal(radio('fork').props.disabled, false)
+  radio('fork').props.onChange(); client.tasks.closeLaunch()
+  assert.deepEqual(operations, [])
+  client.tasks.openDetails(task.id)
+  namedButton(client, '新开一个对话').props.onClick()
+  await until(() => state().options.status === 'ready')
+  assert(radio('blank').props.checked)
+  client.tasks.editLaunch('workspaceId', 'discarded')
+  client.tasks.editLaunch('agentPreset', 'discarded')
+  radio('fork').props.onChange()
+  assert(radio('fork').props.checked)
+  assert(!client.render().some(el => ['launchWorkspace', 'agentPreset'].includes(el.props?.name)))
+  client.render().find(el => el.type === 'form' && el.props.className === 'dsh-tasks-form').props.onSubmit({ preventDefault() {} })
+  await until(() => state().launchForm.checkReceipt)
+  client.tasks.editLaunch('content', 'must not replace frozen message')
+  assert.equal(state().launchForm.content, saved.content)
+  assert.equal(saved.forkFromSessionId, parentSession)
+  assert.equal(saved.replaceActive, true)
+  assert.equal(saved.expectedRevision, 1)
+  assert(!('workspaceId' in saved || 'agentPreset' in saved))
+  await client.tasks.launchTask()
+  assert.deepEqual(operations, ['launch'])
+  await namedButton(client, '查询启动状态').props.onClick()
+  assert(radio('fork').props.disabled)
+  if (phase === 'forking') {
+    assert(!client.render().some(el => el.type === 'button' && el.props.type === 'submit'))
+    assert(client.render().includes('可能已创建分支，尚未发送首条消息。结束本次启动不会改变原对话绑定。'))
+    assert(!state().tasks[0].launch.sessionId)
+    await client.tasks.launchTask()
+    await namedButton(client, '结束本次启动').props.onClick()
+    assert.equal(state().tasks[0].activeSessionId, parentSession)
+    assert.deepEqual(operations, ['launch', 'get', 'abandon-launch'])
+  } else {
+    await client.tasks.launchTask()
+    assert.equal(state().tasks[0].activeSessionId, childSession)
+    assert.deepEqual(operations, ['launch', 'get', 'resume-launch'])
+  }
+  assert.equal(state().launchForm.open, false)
+})
+
+test('archived history opens the original only after confirmation and successful restore', async t => {
+  const task = record({ activeSessionId: childSession, previousSessionIds: [parentSession] }), calls = []
+  const client = await mountClient(t, { async call(_c, _e, { operation }) {
+    return operation === 'list' ? { ok: true, value: { tasks: [task] } } : emptyOptions()
+  } })
+  let succeed, fail
+  client.plugin.ctx.provide('workspaces', { list: { getSnapshot: () => ({ archivedSessionIds: [parentSession] }) } })
+  client.plugin.ctx.provide('uiWorkspace', { openSession(id) { calls.push(['open', id]) }, unarchiveSession(id) {
+    calls.push(['restore', id]); return new Promise((resolve, reject) => { succeed = resolve; fail = reject })
+  } })
+  await waitForState(client.tasks, 'ready')
+  client.tasks.openDetails(task.id)
+  const history = () => namedButton(client, parentSession).props.onClick()
+  const dialog = () => client.render().find(el => el.type === 'dialog' && el.props.role === 'alertdialog')
+  history()
+  assert.equal(dialog().props['aria-label'], '恢复已归档的对话？')
+  namedButton(client, '取消').props.onClick()
+  assert(!dialog()); assert.deepEqual(calls, [])
+  history()
+  const rejected = namedButton(client, '恢复并打开').props.onClick()
+  fail(new Error('Offline')); await rejected
+  assert(dialog()); assert.equal(client.tasks.getSnapshot().detailId, task.id)
+  assert(client.render().includes('未能恢复对话，未打开原对话。'))
+  const accepted = namedButton(client, '恢复并打开').props.onClick()
+  await client.tasks.restoreSession(); client.tasks.cancelRestore()
+  assert(dialog()); assert.deepEqual(calls, [['restore', parentSession], ['restore', parentSession]])
+  succeed(); await accepted
+  assert(!dialog()); assert.deepEqual(calls.at(-1), ['open', parentSession])
+  client.tasks.openSession(childSession)
+  assert(!dialog()); assert.deepEqual(calls.at(-1), ['open', childSession])
+})
+
+test('attachment-only refresh advances the edit baseline without discarding input', async t => {
+  let task = record()
+  const client = await mountClient(t, { async call(_channel, _endpoint, { operation }) {
+    return operation === 'list' ? { ok: true, value: { tasks: [task] } } : emptyOptions()
+  } })
+  await waitForState(client.tasks, 'ready')
+  client.tasks.openDetails(task.id)
+  client.tasks.editDetails('brief', 'Keep typing')
+  task = { ...task, revision: 2, imageCount: 1 }
+  await client.tasks.refresh()
+  assert.equal(client.tasks.getSnapshot().editor.revision, 2)
+  assert.equal(client.tasks.getSnapshot().editor.brief, 'Keep typing')
+  task = { ...task, revision: 3, title: 'Changed elsewhere' }
+  await client.tasks.refresh()
+  assert.equal(client.tasks.getSnapshot().editor.revision, 2)
+  assert.equal(client.tasks.getSnapshot().editor.brief, 'Keep typing')
+})
+
+test('detail draft recovery keeps its original baseline and clears after an explicit discard', async t => {
+  let task = record()
+  const rpc = { async call(_channel, _endpoint, { operation }) {
+    return operation === 'list' ? { ok: true, value: { tasks: [task] } } : emptyOptions()
+  } }
+  const storage = memorySessionStorage()
+  const first = await mountClient(t, rpc, { sessionStorage: storage })
+  await waitForState(first.tasks, 'ready')
+  first.tasks.openDetails(task.id)
+  first.tasks.editDetails('brief', 'Recovered text')
+  await first.plugin.dispose()
+  task = { ...task, revision: 2, title: 'Remote title' }
+  const next = await mountClient(t, rpc, { sessionStorage: storage })
+  await waitForState(next.tasks, 'ready')
+  next.tasks.openDetails(task.id)
+  assert.equal(next.tasks.getSnapshot().editor.brief, 'Recovered text')
+  assert.equal(next.tasks.getSnapshot().editor.revision, 1)
+  await next.tasks.reloadDetails()
+  next.tasks.closeDetails()
+  next.tasks.openDetails(task.id)
+  assert.equal(next.tasks.getSnapshot().editor, undefined)
+})
+
+test('discard-and-reload never clears edits made while the refresh was in flight', async t => {
+  let calls = 0, finish
+  const task = record()
+  const rpc = { call(_channel, _endpoint, { operation }) {
+    if (operation !== 'list') return Promise.resolve(emptyOptions())
+    if (++calls === 1) return Promise.resolve({ ok: true, value: { tasks: [task] } })
+    return new Promise(resolve => { finish = resolve })
+  } }
+  const { tasks } = await mountClient(t, rpc)
+  await waitForState(tasks, 'ready')
+  tasks.openDetails(task.id)
+  tasks.editDetails('brief', 'Original local draft')
+  const reload = tasks.reloadDetails()
+  tasks.editDetails('brief', 'New input during refresh')
+  finish({ ok: true, value: { tasks: [{ ...task, revision: 2, title: 'Remote' }] } })
+  await reload
+  assert.equal(tasks.getSnapshot().editor.brief, 'New input during refresh')
+})
+
+test('unknown detail saves survive reload without changing or automatically replaying the request', async t => {
+  const host = await mountHost(t)
+  const { task } = (await callTask(host.rpc, 'create', { title: 'Original', requestId: 'restore-edit' })).value
+  const inputs = []
+  const rpc = { async call(...args) {
+    const result = await host.rpc.call(...args)
+    if (args[2].operation === 'update') {
+      inputs.push(JSON.stringify(args[2].input))
+      if (inputs.length === 1) throw new Error('Lost reply')
+    }
+    return result
+  } }
+  const first = await mountClient(t, rpc)
+  await waitForState(first.tasks, 'ready')
+  first.tasks.openDetails(task.id)
+  first.tasks.editDetails('brief', 'Uncertain save')
+  await first.tasks.saveDetails()
+  await first.plugin.dispose()
+  const next = await mountClient(t, rpc, { sessionStorage: first.sessionStorage })
+  await waitForState(next.tasks, 'ready')
+  next.tasks.openDetails(task.id)
+  assert.equal(inputs.length, 1)
+  assert.equal(next.tasks.getSnapshot().editor.pending, false)
+  assert(next.tasks.getSnapshot().editor.retryInput)
+  await next.tasks.saveDetails()
+  assert.equal(inputs.length, 2)
+  assert.equal(inputs[0], inputs[1])
+  assert.equal(next.tasks.getSnapshot().editor, undefined)
+})
+
+test('detail edits survive remote changes and cannot overwrite a newer revision', async t => {
+  const host = await mountHost(t)
+  const { task } = (await callTask(host.rpc, 'create', { title: 'Original', requestId: 'create-details' })).value
+  const { tasks } = await mountClient(t, host.rpc)
+  await waitForState(tasks, 'ready')
+  tasks.openDetails(task.id)
+  tasks.editDetails('title', 'Local draft')
+  await callTask(host.rpc, 'update', { taskId: task.id, expectedRevision: 1, requestId: 'remote-edit', patch: { title: 'Remote' } })
+  await tasks.saveDetails()
+  assert.equal(tasks.getSnapshot().editor.errorCode, 'tasks/revision-conflict')
+  await tasks.refresh()
+  assert.equal(tasks.getSnapshot().editor.title, 'Local draft')
+  await tasks.saveDetails()
+  assert.equal(tasks.getSnapshot().tasks[0].title, 'Remote')
+  await tasks.reloadDetails()
+  assert.equal(tasks.getSnapshot().editor, undefined)
+  tasks.editDetails('brief', 'New details')
+  await tasks.saveDetails()
+  assert.equal(tasks.getSnapshot().tasks[0].brief, 'New details')
+  tasks.editDetails('brief', '')
+  await tasks.saveDetails()
+  assert.equal(tasks.getSnapshot().tasks[0].brief, undefined)
+})
+
+test('a lost detail save response retries the identical committed update', async t => {
+  const host = await mountHost(t)
+  const { task } = (await callTask(host.rpc, 'create', { title: 'Original', requestId: 'new-edit' })).value
+  const updates = []
+  const { tasks } = await mountClient(t, { async call(...args) {
+    const result = await host.rpc.call(...args)
+    if (args[2].operation === 'update') {
+      updates.push(args[2].input)
+      if (updates.length === 1) throw new Error('lost response')
+    }
+    return result
+  } })
+  await waitForState(tasks, 'ready')
+  tasks.openDetails(task.id)
+  tasks.editDetails('title', 'Edited')
+  await tasks.saveDetails()
+  assert.equal(tasks.getSnapshot().editor.errorCode, 'tasks/edit-unknown')
+  tasks.editDetails('title', 'Ignored while retrying')
+  await tasks.saveDetails()
+  assert.deepEqual(updates[0], updates[1])
+  assert.equal(tasks.getSnapshot().editor, undefined)
+  assert.equal(tasks.getSnapshot().tasks[0].revision, 2)
+  assert.equal(tasks.getSnapshot().tasks[0].title, 'Edited')
+})
+
 test('actual board callbacks create, search description/title, move, and refresh persisted cards', async t => {
   const host = await mountHost(t)
   const client = await mountClient(t, host.rpc)
   await waitForState(client.tasks, 'ready')
-  nodeWith(client, 'dsh-tasks-primary').props.onClick()
+  client.render().find(node => node.type === 'button' && node.props['aria-label'] === '新建任务').props.onClick()
   const title = client.render().find(node => node.type === 'input' && node.props.name === 'title')
   const brief = client.render().find(node => node.type === 'textarea')
   title.props.onChange({ target: { value: '  接入 Payments  ' } })
@@ -154,7 +475,7 @@ test('actual board callbacks create, search description/title, move, and refresh
   assert(!client.render().some(node => node.type === 'form'))
   const counts = () => client.render().filter(node => node.props?.className === 'dsh-tasks-count').map(node => node.props.children)
   assert.deepEqual(counts(), ['1', '0', '0'])
-  const search = nodeWith(client, 'dsh-tasks-search')
+  const search = client.render().find(node => node.props?.type === 'search')
   search.props.onChange({ target: { value: 'CALLBACK' } })
   assert.equal(cards(client).length, 1)
   assert.deepEqual(counts(), ['1 / 1', '0 / 0', '0 / 0'])
@@ -397,7 +718,17 @@ test('completed column keeps total count while showing recent 10; expanding and 
   assert.equal(cards(client).length, 10)
   assert.equal(cards(client)[0].props['data-task-id'], 'task-11')
   assert.equal(client.render().filter(node => node.props?.className === 'dsh-tasks-count')[2].props.children, '12')
-  client.tasks.toggleDone()
+  const range = () => client.render().find(node => node.props?.className === 'dsh-tasks-done-range')
+  assert.equal(range().props['aria-pressed'], false)
+  client.tasks.setQuery('Completed')
+  assert.equal(cards(client).length, 12, 'Search does not truncate matches')
+  assert.equal(range(), undefined)
+  client.tasks.setQuery('Completed 11')
+  assert.equal(cards(client).length, 1)
+  assert.equal(range(), undefined)
+  client.tasks.setQuery('')
+  range().props.onClick()
+  assert.equal(range().props['aria-pressed'], true)
   assert.equal(cards(client).length, 12)
   client.tasks.toggleColumn('done')
   assert.equal(cards(client).length, 0)
@@ -414,15 +745,16 @@ async function until(predicate) {
   }
 }
 
-test('appearance follows the optional global theme and ignores legacy task preferences', async t => {
+test('appearance is owned by the optional theme slot and ignores legacy task preferences', async t => {
   const storage = memorySessionStorage()
   storage.setItem('dsh-plugin-tasks:appearance-v1', 'classic')
   storage.setItem('unrelated-key', 'keep')
   const client = await mountClient(t, { call: async () => emptyList() }, { sessionStorage: storage })
   await waitForState(client.tasks, 'ready')
-  assert.equal(nodeWith(client, 'dsh-tasks-root').props['data-tasks-appearance'], undefined)
+  assert.equal(nodeWith(client, 'dsh-tasks-root dsh-tasks-board-view').props['data-tasks-appearance'], undefined)
   const css = client.render().find(node => node.type === 'style').props.children
-  assert(css.includes('body[data-dsh-paper-theme="paper"] .dsh-tasks-root'))
+  assert(css.includes('body[data-dsh-paper-theme="paper"]:not([data-dsh-task-appearance="ios"])'))
+  assert(css.includes('body[data-dsh-task-appearance="paper"]'))
   assert(css.includes('.dsh-tasks-root .dsh-tasks-select-list'))
   assert(css.includes('--dsh-tasks-paper: var(--dsh-paper-paper)'))
   assert(css.includes(':focus { outline: none; box-shadow: none; border-color: var(--dsh-tasks-focus); }'))

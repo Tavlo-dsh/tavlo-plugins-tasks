@@ -1,6 +1,10 @@
 {
-  "name": "dsh-plugin-tasks",
-  "version": "0.1.0",
+  "name": "@tavlo-dsh/dsh-plugin-tasks",
+  "version": "0.2.1",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "description": "DSH 任务看板：把要做的事变成能一键发射、并能实时看到状态的卡片",
   "license": "MIT",
   "author": "Tavlo-dsh",
@@ -16,7 +20,15 @@
   "main": "index.js",
   "exports": {
     ".": "./index.js",
-    "./client": "./client.js",
+    "./client": "./lib/client.js",
+    "./service": {
+      "types": "./task-service.d.ts",
+      "default": "./task-service.js"
+    },
+    "./mcp": {
+      "types": "./task-mcp.d.ts",
+      "default": "./task-mcp.js"
+    },
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg",
     "./package.json": "./package.json"
@@ -24,11 +36,23 @@
   "files": [
     "index.js",
     "task-schema.js",
+    "task-board.js",
+    "task-images.js",
     "task-store.js",
     "task-options.js",
     "task-events.js",
     "task-sessions.js",
-    "client.js",
+    "task-identity.js",
+    "task-storage.js",
+    "task-service.js",
+    "task-service.d.ts",
+    "task-mcp.js",
+    "task-mcp.d.ts",
+    "task-mcp-client.js",
+    "task-mcp-access.js",
+    "bin/tasks-mcp.js",
+    "lib/client.js",
+    "lib/client.js.LEGAL.txt",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
@@ -55,23 +79,40 @@
     }
   },
   "engines": {
-    "dsh": "0.2.2-rc.1"
+    "dsh": "0.2.2-rc.1",
+    "node": ">=24.0.0"
+  },
+  "bin": {
+    "dsh-tasks-mcp": "./bin/tasks-mcp.js"
   },
   "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "prepack": "npm run build",
+    "pretest": "npm run build",
     "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "~4.1.0",
     "@deepseek-ai/dsh-client-connection": "0.2.2-rc.1",
     "@deepseek-ai/dsh-scope": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-storage": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-storage-domain": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-storage-sqlite": "0.2.2-rc.1",
     "@deepseek-ai/schemastery": "3.19.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "ws": "8.23.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-host-webserver": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-storage": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-storage-domain": "0.2.2-rc.1",
     "@deepseek-ai/dsh-storage-json": "0.2.2-rc.1",
-    "react": "^18.2.0"
+    "@dnd-kit/core": "6.3.1",
+    "@radix-ui/react-popover": "1.3.1",
+    "clsx": "2.1.1",
+    "date-fns": "4.4.0",
+    "esbuild": "0.28.2",
+    "react": "^18.2.0",
+    "react-day-picker": "10.0.1",
+    "react-dom": "18.3.1"
   }
 }

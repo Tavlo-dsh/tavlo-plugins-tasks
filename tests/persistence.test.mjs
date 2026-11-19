@@ -1,13 +1,11 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import test from 'node:test'
 import { StorageError } from '@deepseek-ai/dsh-storage'
 import * as tasksHost from '../index.js'
 import { taskDomain } from '../task-schema.js'
 import { createTaskStore } from '../task-store.js'
-import { callTask, mountHost, mountStorage, RPC_PATH } from './fixtures.mjs'
+import { callTask, mountHost, mountStorage, RPC_PATH, readTaskDatabase, writeTaskDatabase } from './fixtures.mjs'
 
 const limits = { maxTitleLength: 200, maxBriefLength: 20000, maxTasks: 10000 }
 const success = result => { assert.equal(result.ok, true, JSON.stringify(result)); return result.value }
@@ -41,8 +39,8 @@ test('HTTP creation and stage changes survive closing and a fresh Host', async t
   assert.equal(changed.stage, 'doing')
   assert.equal(changed.createdAt, task.createdAt)
   assert.deepEqual(success(await callTask(first.rpc, 'list', {})).tasks, [changed])
-  const disk = JSON.parse(await readFile(join(first.storageRoot, 'tasks.json'), 'utf8'))
-  assert.equal(disk.unit.version, 4)
+  const disk = readTaskDatabase(first.storageRoot)
+  assert.equal(disk.unit.version, 8)
   assert.equal(disk.tables.tasks[task.id]._create.requestId, 'durable-create')
   await first.shutdown()
 
@@ -90,11 +88,10 @@ test('two updates with the same revision commit exactly one change', async t => 
 test('new task ordering follows valid fractional positions restored from disk', async t => {
   const first = await mountHost(t)
   const task = success(await callTask(first.rpc, 'create', { requestId: 'position', title: 'Existing' })).task
-  const path = join(first.storageRoot, 'tasks.json')
   await first.shutdown()
-  const document = JSON.parse(await readFile(path, 'utf8'))
+  const document = readTaskDatabase(first.storageRoot)
   document.tables.tasks[task.id].position = 0.5
-  await writeFile(path, JSON.stringify(document))
+  writeTaskDatabase(first.storageRoot, document)
   const host = await mountHost(t, { storageRoot: first.storageRoot })
   const next = success(await callTask(host.rpc, 'create', { requestId: 'position-next', title: 'Next' })).task
   assert.equal(next.position, 1)
@@ -142,16 +139,16 @@ test('backend failure leaves both memory and disk unchanged and allows retry', a
   const input = { requestId: 'retry-write', title: 'Durable only' }
   assert.equal(errorCode(await callTask(host.rpc, 'create', input)), 'tasks/persistence-failed')
   assert.deepEqual(success(await callTask(host.rpc, 'list', {})).tasks, [])
-  await assert.rejects(readFile(join(host.storageRoot, 'tasks.json')), { code: 'ENOENT' })
+  assert.deepEqual(readTaskDatabase(host.storageRoot).tables.tasks, {})
   failWrites = false
   const task = success(await callTask(host.rpc, 'create', input)).task
-  const before = await readFile(join(host.storageRoot, 'tasks.json'), 'utf8')
+  const before = readTaskDatabase(host.storageRoot)
   failWrites = true
   assert.equal(errorCode(await callTask(host.rpc, 'set-stage', {
     taskId: task.id, expectedRevision: 1, stage: 'doing',
   })), 'tasks/persistence-failed')
   assert.deepEqual(success(await callTask(host.rpc, 'list', {})).tasks, [task])
-  assert.equal(await readFile(join(host.storageRoot, 'tasks.json'), 'utf8'), before)
+  assert.deepEqual(readTaskDatabase(host.storageRoot), before)
   failWrites = false
   assert.equal(success(await callTask(host.rpc, 'set-stage', {
     taskId: task.id, expectedRevision: 1, stage: 'doing',
@@ -177,20 +174,18 @@ test('uncertain commit quarantines reads; reopening recovers the creation reques
 test('invalid durable records prevent Host activation and remain untouched', async t => {
   const first = await mountHost(t)
   const task = success(await callTask(first.rpc, 'create', { requestId: 'corrupt', title: 'Saved' })).task
-  const path = join(first.storageRoot, 'tasks.json')
-  const original = await readFile(path, 'utf8')
+  const original = readTaskDatabase(first.storageRoot)
   await first.shutdown()
-  const document = JSON.parse(original)
+  const document = structuredClone(original)
   document.tables.tasks[task.id].stage = 'foreign-stage'
-  const corrupted = JSON.stringify(document)
-  await writeFile(path, corrupted)
+  writeTaskDatabase(first.storageRoot, document)
   const host = await mountHost(t, { storageRoot: first.storageRoot, activate: false })
   const failed = host.own(host.ctx.plugin(tasksHost))
   await assert.rejects(failed.await(), { code: 'invalid-record' })
   assert.equal((await host.fetchAuthenticated(RPC_PATH, { method: 'POST' })).status, 404)
-  assert.equal(await readFile(path, 'utf8'), corrupted)
+  assert.deepEqual(readTaskDatabase(first.storageRoot), document)
   await failed.dispose()
-  await writeFile(path, original)
+  writeTaskDatabase(first.storageRoot, original)
   const repaired = host.own(host.ctx.plugin(tasksHost))
   await repaired.await()
   assert.equal(success(await callTask(host.rpc, 'list', {})).tasks[0].id, task.id)
@@ -202,22 +197,20 @@ test('inconsistent keys and duplicate request ids fail activation and release th
     await t.test(duplicateRequest ? 'duplicate request' : 'key/id mismatch', async t => {
       const first = await mountHost(t)
       const task = success(await callTask(first.rpc, 'create', { requestId: 'integrity', title: 'Saved' })).task
-      const path = join(first.storageRoot, 'tasks.json')
-      const original = await readFile(path, 'utf8')
+      const original = readTaskDatabase(first.storageRoot)
       await first.shutdown()
-      const document = JSON.parse(original)
+      const document = structuredClone(original)
       const key = randomUUID()
       const record = structuredClone(document.tables.tasks[task.id])
       if (duplicateRequest) record.id = key
       document.tables.tasks[key] = record
-      const bad = JSON.stringify(document)
-      await writeFile(path, bad)
+      writeTaskDatabase(first.storageRoot, document)
       const host = await mountHost(t, { storageRoot: first.storageRoot, activate: false })
       const failed = host.own(host.ctx.plugin(tasksHost))
       await assert.rejects(failed.await(), /inconsistent record identity|duplicate creation request/)
-      assert.equal(await readFile(path, 'utf8'), bad)
+      assert.deepEqual(readTaskDatabase(first.storageRoot), document)
       await failed.dispose()
-      await writeFile(path, original)
+      writeTaskDatabase(first.storageRoot, original)
       const repaired = host.own(host.ctx.plugin(tasksHost))
       await repaired.await()
       assert.equal(success(await callTask(host.rpc, 'list', {})).tasks.length, 1)

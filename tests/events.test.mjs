@@ -66,6 +66,230 @@ function streamTransport() {
   }
 }
 
+test('attachment events rebase drafts but never change pending or uncertain save payloads', async t => {
+  const transport = streamTransport()
+  let rejectSave
+  const client = await mountClient(t, { call(_channel, _endpoint, { operation }) {
+    if (operation === 'update') return new Promise((_resolve, reject) => { rejectSave = reject })
+    return Promise.resolve(emptyList())
+  } }, { fetch: transport.fetch })
+  transport.connections[0].send(baseline([record()]))
+  await until(() => client.tasks.getSnapshot().sync === 'live')
+  client.tasks.openDetails(record().id)
+  client.tasks.editDetails('brief', 'Local text')
+  transport.connections[0].send(change(record({ revision: 2, imageCount: 1 })))
+  await until(() => client.tasks.getSnapshot().editor.revision === 2)
+  const saving = client.tasks.saveDetails()
+  const payload = JSON.stringify(client.tasks.getSnapshot().editor.retryInput)
+  transport.connections[0].send(change(record({ revision: 3, imageCount: 2 }), 2))
+  await until(() => client.tasks.getSnapshot().tasks[0].revision === 3)
+  assert.equal(client.tasks.getSnapshot().editor.revision, 2)
+  assert.equal(JSON.stringify(client.tasks.getSnapshot().editor.retryInput), payload)
+  rejectSave(new Error('Lost acknowledgement'))
+  await saving
+  transport.connections[0].send(change(record({ revision: 4, imageCount: 3 }), 3))
+  await until(() => client.tasks.getSnapshot().tasks[0].revision === 4)
+  assert.equal(JSON.stringify(client.tasks.getSnapshot().editor.retryInput), payload)
+  assert.equal(client.tasks.getSnapshot().editor.brief, 'Local text')
+})
+
+test('a late upload response cannot erase a newer remote text conflict received by SSE', async t => {
+  const transport = streamTransport()
+  let finishUpload
+  const client = await mountClient(t, { call: async () => emptyList() }, { fetch: (url, init) => init.method === 'POST'
+    ? new Promise(resolve => { finishUpload = resolve }) : transport.fetch(url, init) })
+  transport.connections[0].send(baseline([record()]))
+  await until(() => client.tasks.getSnapshot().sync === 'live')
+  client.tasks.openDetails(record().id)
+  client.tasks.editDetails('brief', 'Keep local text')
+  client.tasks.queueImages(record().id, [{ type: 'image/png', size: 5, name: 'local.png' }], { mediaTypes: ['image/png'], maxImageBytes: 10, maxImages: 10 })
+  transport.connections[0].send(change(record({ revision: 2, imageCount: 1 })))
+  await until(() => client.tasks.getSnapshot().editor.revision === 2)
+  transport.connections[0].send(change(record({ revision: 3, imageCount: 1, title: 'Remote title' }), 2))
+  await until(() => client.tasks.getSnapshot().tasks[0].revision === 3)
+  finishUpload({ json: async () => ({ ok: true, value: { task: record({ revision: 2, imageCount: 1 }) }, streamId: 'host-1', sequence: 1 }) })
+  await until(() => client.tasks.getSnapshot().imageJobs[record().id].length === 0)
+  assert.equal(client.tasks.getSnapshot().tasks[0].title, 'Remote title')
+  assert.equal(client.tasks.getSnapshot().editor.revision, 2)
+  assert.equal(client.tasks.getSnapshot().editor.brief, 'Keep local text')
+})
+
+test('due chart scopes dates to unfinished matching tasks and its chip clears only the date', async t => {
+  const transport = streamTransport()
+  const client = await mountClient(t, { call: async () => emptyList() }, { fetch: transport.fetch, fullscreen: true })
+  const columns = ['todo', 'doing', 'done'].map(stage => ({ id: 'stage:' + stage, stage }))
+  const rows = [-1, 0, 1, 2, 7, 8, null, 1].map((days, index) => {
+    const date = new Date()
+    date.setDate(date.getDate() + days)
+    return record({ id: String(index), dueDate: days == null ? undefined : date.toLocaleDateString('sv-SE'), priority: index === 4 ? 'P1' : 'P0', stage: index === 7 ? 'done' : 'todo' })
+  })
+  transport.connections[0].send(baseline(rows, { board: { columns, revision: 1 } }))
+  await until(() => client.tasks.getSnapshot().sync === 'live')
+  const periods = () => client.render().filter(node => node.props?.['data-period'])
+  const counts = () => client.render().filter(node => node.props?.className === 'dsh-tasks-due-count').map(node => node.props.children)
+  const visible = () => client.render().filter(node => node.type === 'article').map(node => node.props['data-task-id'])
+  assert.deepEqual(counts(), [1, 1, 1, 2])
+  periods()[3].props.onClick()
+  assert.deepEqual(visible(), ['3', '4'])
+  client.tasks.setFilter('priority', 'P0')
+  assert.deepEqual(counts(), [1, 1, 1, 1])
+  periods()[2].props.onClick()
+  assert.deepEqual(visible(), ['2'])
+  client.render().find(node => node.props?.className === 'dsh-tasks-due-chip').props.onClick()
+  assert.equal(client.tasks.getSnapshot().filters.priority, 'P0')
+  assert.equal(visible().length, 7)
+  transport.connections[0].send(change({ ...rows[6], priority: 'P2', revision: 2 }))
+  await until(() => client.tasks.getSnapshot().tasks.some(task => task.priority === 'P2'))
+  client.tasks.setFilter('priority', 'P2')
+  assert(client.render().includes('当前未完成任务均未设截止日期。'))
+  assert.equal(periods().length, 0)
+})
+
+test('done-range controls appear only for truncated columns and expand independently', async t => {
+  const transport = streamTransport(), columns = ['small', 'first', 'second'].map(id => ({ id, stage: 'done', name: id }))
+  const rows = columns.flatMap((column, index) => Array.from({ length: index ? 11 : 3 }, (_, i) =>
+    record({ id: `${column.id}-${i}`, stage: 'done', columnId: column.id })))
+  const client = await mountClient(t, { call: async () => emptyList() }, { fetch: transport.fetch })
+  transport.connections[0].send(baseline(rows, { board: { columns, revision: 1 } }))
+  await until(() => client.tasks.getSnapshot().sync === 'live')
+  const ranges = () => client.render().filter(node => node.props?.className === 'dsh-tasks-done-range')
+  const articles = () => client.render().filter(node => node.type === 'article')
+  assert.equal(ranges().length, 2)
+  assert.equal(articles().length, 23)
+  ranges()[0].props.onClick()
+  assert.equal(articles().length, 24)
+  assert.deepEqual(ranges().map(node => node.props['aria-pressed']), [true, false])
+  client.tasks.setQuery('同步任务')
+  assert.equal(ranges().length, 0)
+  assert.equal(articles().length, 25)
+  client.tasks.setQuery('')
+  assert.equal(articles().length, 24)
+})
+
+test('insights render regardless of fullscreen and count only known completion times', async t => {
+  for (const fullscreen of [false, true]) {
+    const transport = streamTransport()
+    const client = await mountClient(t, { call: async () => emptyList() }, { fetch: transport.fetch, fullscreen })
+    const now = Date.now()
+    const rows = [record({ id: 'a', stage: 'done', createdAt: new Date(now - 129600000).toISOString(), completedAt: new Date(now).toISOString() }),
+      record({ id: 'b', stage: 'done' }), record({ id: 'c', stage: 'doing' })]
+    transport.connections[0].send(baseline(rows, { board: { columns: [], revision: 1 } }))
+    await until(() => client.tasks.getSnapshot().sync === 'live')
+    const view = client.render()
+    assert(view.some(node => node.props?.className === 'dsh-tasks-insights'))
+    assert.equal(view.find(node => node.type === 'progress').props.value, 67)
+    assert.deepEqual(view.filter(node => node.props?.className === 'dsh-tasks-metric').map(node => node.props.children[1].props.children), [0, 1, 1, '1.5 天'])
+  }
+})
+
+test('overview counts custom and grouped columns within the selected workspace', async t => {
+  const transport = streamTransport()
+  const client = await mountClient(t, { call: async () => emptyList() }, { fetch: transport.fetch })
+  const columns = ['todo', 'doing', 'done'].map(stage => ({ id: 'stage:' + stage, stage }))
+  columns.push(...Array.from({ length: 4 }, (_, index) => ({ id: `custom-${index}`, name: `自定义 ${index}`, stage: 'doing' })))
+  const tasks = [record({ id: 'a', workspaceId: 'one', stage: 'doing', columnId: 'custom-0' }),
+    record({ id: 'b', workspaceId: 'two', stage: 'doing', columnId: 'custom-0' }),
+    record({ id: 'c', workspaceId: 'one', stage: 'doing', columnId: 'custom-3' })]
+  transport.connections[0].send(baseline(tasks, { board: { revision: 1, columns } }))
+  await until(() => client.tasks.getSnapshot().sync === 'live')
+  const counts = () => Object.fromEntries(client.render().find(node => node.props?.className === 'dsh-tasks-column-mix')
+    .props.children.map(row => [row.props.children[0].props.children, row.props.children[2].props.children]))
+  assert.equal(counts()['进行中'], 0)
+  assert.equal(counts()['自定义 0'], 2)
+  assert.equal(counts()['其余列 · 2'], 1)
+  client.tasks.setWorkspaceFilter('two')
+  assert.equal(counts()['自定义 0'], 1)
+  assert.equal(counts()['其余列 · 2'], 0)
+})
+
+test('overview lists rank attention, use actual completion timestamps, and respect filter scope', async t => {
+  const transport = streamTransport(), sessionId = '12345678-1234-4321-8765-abcdefabcdef'
+  const client = await mountClient(t, { call: async () => emptyList() }, { fetch: transport.fetch })
+  const daysFromNow = days => new Date(Date.now() + days * 86400000).toLocaleDateString('sv-SE')
+  const item = (id, attrs) => record({ id, title: id, workspaceId: 'one', ...attrs })
+  const tasks = [item('high', { priority: 'P0' }), item('ordinary', { priority: 'P2' }), item('far', { dueDate: daysFromNow(9) }),
+    item('soon', { dueDate: daysFromNow(5) }), item('tomorrow', { dueDate: daysFromNow(1) }), item('today', { dueDate: daysFromNow(0) }),
+    item('late', { dueDate: daysFromNow(-2) }), item('question', { activeSessionId: sessionId }), item('approval', { activeSessionId: sessionId }),
+    item('other-scope', { workspaceId: 'two', priority: 'P1' }),
+    item('unknown-completion', { stage: 'done' }), ...Array.from({ length: 6 }, (_, i) => item('done-' + i,
+      { stage: 'done', completedAt: `2026-01-01T10:0${i}:00Z`, updatedAt: `2026-02-01T10:0${5 - i}:00Z` }))]
+  const statuses = Object.fromEntries(['approval', 'question'].map(status => [status, { sessionId, status }]))
+  transport.connections[0].send(baseline(tasks, { statuses, board: { revision: 1, columns: [] } }))
+  await until(() => client.tasks.getSnapshot().sync === 'live')
+  const list = kind => client.render().find(node => node.props?.['data-list'] === kind).props.children[1]
+  const rows = kind => list(kind).type === 'ul' ? Array.from(list(kind).props.children, row => row.props.children.props) : []
+  const labels = kind => rows(kind).map(row => row['aria-label'].split(' · ')[0])
+  assert.deepEqual(labels('attention'), ['approval', 'question', 'late', 'today', 'tomorrow'])
+  assert.deepEqual(labels('recent'), ['done-5', 'done-4', 'done-3', 'done-2', 'done-1'])
+  assert.equal(rows('recent')[0].children[1].props.children[1].props.dateTime, '2026-01-01T10:05:00Z')
+  client.tasks.setFilter('dueDate', 'nextWeek')
+  assert.deepEqual(labels('attention'), ['soon'])
+  assert.equal(labels('recent').length, 5, 'A due-date filter does not hide completion history')
+  rows('attention')[0].onClick()
+  assert.equal(client.tasks.getSnapshot().detailId, 'soon')
+  client.tasks.clearFilters()
+  client.tasks.setWorkspaceFilter('two')
+  assert.deepEqual(labels('attention'), ['other-scope'])
+  assert.equal(rows('attention')[0]['aria-label'], 'other-scope · 高优先级 · P1')
+  assert.equal(list('recent').props.children, '暂无带完成时间的任务。')
+})
+
+test('activity keeps earlier pages while merging new events and ignores results for a closed task', async t => {
+  const transport = streamTransport(), requests = []
+  const task = record()
+  const client = await mountClient(t, { call(_channel, _endpoint, { operation, input }) {
+    if (operation === 'list') return emptyList()
+    assert.equal(operation, 'history')
+    return new Promise(resolve => requests.push({ input, resolve }))
+  } }, { fetch: transport.fetch })
+  const { tasks } = client
+  const reply = (index, newest, oldest, before) => requests[index].resolve({ ok: true, value: {
+    events: Array.from({ length: newest - oldest + 1 }, (_, offset) => ({ id: newest - offset })), before,
+  } })
+  const ids = () => Array.from(tasks.getSnapshot().activity.events, event => event.id)
+  await until(() => transport.connections.length === 1)
+  const connection = transport.connections[0]
+  connection.send(baseline([task], { board: { columns: [], revision: 1 } }))
+  await until(() => tasks.getSnapshot().board)
+  tasks.openDetails(task.id)
+  assert.equal(requests.length, 0)
+  const first = tasks.loadHistory()
+  await until(() => requests.length === 1)
+  reply(0, 55, 31, 31)
+  await first
+  const older = tasks.loadHistory(true)
+  await until(() => requests.length === 2)
+  assert.equal(requests[1].input.before, 31)
+  connection.send(change(record({ revision: 2 })))
+  await until(() => tasks.getSnapshot().tasks[0].revision === 2)
+  assert.equal(requests.length, 2)
+  reply(1, 30, 6, 6)
+  await older
+  await until(() => requests.length === 3)
+  assert.equal(ids().at(-1), 6)
+  reply(2, 81, 57, 57)
+  await until(() => requests.length === 4)
+  assert.equal(requests[3].input.before, 57)
+  reply(3, 56, 32, 32)
+  await until(() => !tasks.getSnapshot().activity.loading)
+  assert.deepEqual(ids(), Array.from({ length: 76 }, (_, index) => 81 - index))
+  assert.equal(tasks.getSnapshot().activity.before, 6)
+  const failed = tasks.loadHistory(true)
+  await until(() => requests.length === 5)
+  requests[4].resolve({ ok: false })
+  await failed
+  assert.equal(tasks.getSnapshot().activity.error, 'older')
+  assert.equal(ids().at(-1), 6)
+  const retry = tasks.loadHistory(true)
+  await until(() => requests.length === 6)
+  assert.equal(requests[5].input.before, 6)
+  tasks.closeDetails()
+  tasks.openDetails(task.id)
+  reply(5, 5, 1)
+  await retry
+  assert.equal(tasks.getSnapshot().activity, undefined)
+})
+
 async function openReader(t, host) {
   const abort = new AbortController()
   t.after(() => abort.abort())
@@ -93,6 +317,32 @@ async function openReader(t, host) {
     }
   }
 }
+
+test('external updates have identical public records in Host, RPC, SSE and the shipped Client', async t => {
+  const host = await mountHost(t)
+  const service = host.ctx.get('taskService')
+  const externalRef = { provider: 'tapd', connectionId: '22222222-2222-4222-8222-222222222222', scopeId: 'project', objectType: 'story', objectId: '1123456789000000123' }
+  const next = await openReader(t, host)
+  assert.equal((await next()).type, 'snapshot')
+  const client = await mountClient(t, host.rpc, { fetch: host.fetchAuthenticated })
+  await waitForState(client.tasks, 'ready')
+  const created = await service.execute('create', { requestId: 'external-stream', title: 'External', externalRef })
+  assert(created.ok)
+  assert.deepEqual((await next()).task, created.value.task)
+  const updated = await callTask(host.rpc, 'update', { taskId: created.value.task.id, requestId: 'stream-update', expectedRevision: 1,
+    patch: { title: 'Updated externally', externalRef: { ...externalRef, url: 'https://example.org/item' } } })
+  assert(updated.ok)
+  const event = await next()
+  assert.deepEqual(event.task, updated.value.task)
+  assert(!JSON.stringify(event).includes('_updates'))
+  await until(() => client.tasks.getSnapshot().tasks[0]?.revision === 2)
+  assert.equal(client.tasks.getSnapshot().tasks[0].title, 'Updated externally')
+  const unbound = await service.execute('update', { taskId: created.value.task.id, requestId: 'stream-unbind', expectedRevision: 2, patch: { externalRef: null } })
+  assert(unbound.ok)
+  assert.deepEqual((await next()).task, unbound.value.task)
+  assert(!Object.hasOwn(unbound.value.task, 'externalRef'))
+  assert.deepEqual((await callTask(host.rpc, 'get', { taskId: created.value.task.id })).value.task, unbound.value.task)
+})
 
 test('real HTTP SSE enforces owner access and emits only committed changes, with restart baselines', async t => {
   const first = await mountHost(t)
@@ -249,6 +499,11 @@ test('two shipped Client sources synchronize real HTTP writes through one stream
   await first.tasks.setStage(task.id, 'doing')
   await until(() => second.tasks.getSnapshot().tasks[0].stage === 'doing')
   assert.equal(second.tasks.getSnapshot().tasks[0].revision, 2)
+  const revision = first.tasks.getSnapshot().board.revision
+  assert((await first.tasks.editColumns({ expectedRevision: revision, action: 'reorder', columnId: 'stage:doing', before: 'stage:todo' })).ok)
+  await until(() => second.tasks.getSnapshot().board.revision === revision + 1)
+  assert.deepEqual(Array.from(second.tasks.getSnapshot().board.columns, column => column.id), ['stage:doing', 'stage:todo', 'stage:done'])
+  assert.equal(second.tasks.getSnapshot().tasks[0].columnId, 'stage:doing')
   assert.equal(second.tasks.getSnapshot().form.title, '保留的草稿')
   assert.equal(second.tasks.getSnapshot().query, '同步')
   assert(second.render().includes('实时同步已连接'))

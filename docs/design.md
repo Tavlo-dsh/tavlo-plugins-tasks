@@ -1,6 +1,6 @@
 # 任务面板（Task Board）设计
 
-DSH 插件，包名 `dsh-plugin-tasks`，Loader entry `tavlo-tasks`。
+DSH 插件，包名 `@tavlo-dsh/dsh-plugin-tasks`，Loader entry `tavlo-tasks`。
 
 ## 1. 定位
 
@@ -324,15 +324,17 @@ L3 规则：
  ├ 有活跃对话 且 执行中        → 提示「已有对话在执行」，终止
  ├ 有活跃对话 且 空闲          → 询问「接着用 / 新开一个」
  │    ├ 接着用   → 直接打开该对话，不建新会话
- │    └ 新开一个 → 走下面新建流程，旧 id 移入 previousSessionIds
+ │    └ 新开一个 → 选空白或原生 Fork；成功绑定后旧 id 移入 previousSessionIds
  └ 无活跃对话                  → 开启动面板 → 确认后：
        1. 持久化 launch 请求、预分配 sessionId，phase = prepared
        2. create({ sessionId, workspaceId, agentPreset })；持久化 phase = created
        3. 若 model → selectModel({ sessionId, ... })；持久化 phase = sending
        4. prompt({ requestId, sessionId, mode: 'queue', content })
        5. 写回 activeSessionId、phase = complete；stage: todo → doing
-       6. 打开该对话
+       6. 留在看板，需要时打开该对话
 ```
+
+Fork 不能预分配子会话 ID。先持久化「正在 Fork」，调用一次宿主原生 Fork，取得子 ID 并保存后才允许发送首条消息。如果宿主可能已创建分支但未能记录子 ID，则停止，不猜测目标或自动重建。操作与恢复契约见[任务服务](task-service.md#从当前任务会话-fork)。
 
 失败处理：
 

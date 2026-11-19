@@ -1,10 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import { setImmediate } from 'node:timers/promises'
 import { StorageError } from '@deepseek-ai/dsh-storage'
-import { callTask, mountClient, mountHost, waitForState } from './fixtures.mjs'
+import { callTask, mountClient, mountHost, waitForState, readTaskDatabase, writeTaskDatabase } from './fixtures.mjs'
 
 const create = (host, requestId = 'delete-test') => callTask(host.rpc, 'create', { requestId, title: '任务正文将被移除', brief: '任务描述' }).then(result => {
   assert(result.ok); return result.value.task
@@ -20,8 +18,8 @@ test('delete removes task content durably, is replayable, releases capacity and 
   const task = await create(first)
   assert((await callTask(first.rpc, 'delete', input(task))).ok)
   assert.deepEqual((await callTask(first.rpc, 'list', {})).value.tasks, [])
-  const disk = JSON.parse(await readFile(join(first.storageRoot, 'tasks.json'), 'utf8'))
-  assert.equal(disk.unit.version, 4)
+  const disk = readTaskDatabase(first.storageRoot)
+  assert.equal(disk.unit.version, 8)
   assert.deepEqual(Object.keys(disk.tables.tasks[task.id]).sort(), ['_deleted', 'id'])
   assert(!JSON.stringify(disk).includes(task.title))
   assert((await callTask(first.rpc, 'delete', input(task))).ok)
@@ -61,11 +59,11 @@ test('failed deletion keeps memory and disk; uncertain commit quarantines until 
     return typeof value === 'function' ? value.bind(target) : value
   } }) })
   const task = await create(host)
-  const before = await readFile(join(host.storageRoot, 'tasks.json'), 'utf8')
+  const before = readTaskDatabase(host.storageRoot)
   failure = 'rejected'
   assert.equal((await callTask(host.rpc, 'delete', input(task))).error.code, 'tasks/persistence-failed')
   assert.deepEqual((await callTask(host.rpc, 'list', {})).value.tasks, [task])
-  assert.equal(await readFile(join(host.storageRoot, 'tasks.json'), 'utf8'), before)
+  assert.deepEqual(readTaskDatabase(host.storageRoot), before)
   failure = 'unknown'
   assert.equal((await callTask(host.rpc, 'delete', input(task))).error.code, 'tasks/persistence-unknown')
   assert.equal((await callTask(host.rpc, 'list', {})).error.code, 'tasks/persistence-unknown')
@@ -75,22 +73,21 @@ test('failed deletion keeps memory and disk; uncertain commit quarantines until 
   assert((await callTask(next.rpc, 'delete', input(task))).ok)
 })
 
-test('v4 reads v3 tasks, preserves sessions and blocks deleting unresolved launches', async t => {
+test('v5 reads v3 tasks, preserves sessions and blocks deleting unresolved launches', async t => {
   const first = await mountHost(t)
   const task = await create(first)
   await first.shutdown()
-  const file = join(first.storageRoot, 'tasks.json')
-  const disk = JSON.parse(await readFile(file, 'utf8'))
+  const disk = readTaskDatabase(first.storageRoot)
   disk.unit.version = 3
   const sessionId = 'c02685f4-fcca-46b3-b43b-acf80d32efe4'
   const receipt = { input: { ...input(task), requestId: 'saved-launch', content: 'saved', replaceActive: false }, sessionId, phase: 'sending' }
   Object.assign(disk.tables.tasks[task.id], { launch: receipt, _launches: [receipt], activeSessionId: sessionId })
-  await writeFile(file, JSON.stringify(disk))
+  writeTaskDatabase(first.storageRoot, disk)
   const next = await mountHost(t, { storageRoot: first.storageRoot })
   assert.equal((await callTask(next.rpc, 'delete', input(task))).error.code, 'tasks/launch-pending')
   await next.shutdown()
   receipt.phase = 'complete'
-  await writeFile(file, JSON.stringify(disk))
+  writeTaskDatabase(first.storageRoot, disk)
   let sessionCalls = 0
   const final = await mountHost(t, { storageRoot: first.storageRoot, sessionController: new Proxy({}, { get() { return () => { sessionCalls++ } } }) })
   assert((await callTask(final.rpc, 'delete', input(task))).ok)

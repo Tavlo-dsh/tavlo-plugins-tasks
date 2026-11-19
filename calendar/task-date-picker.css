@@ -1,0 +1,32 @@
+.dsh-tasks-date-field, .dsh-tasks-date-popup {
+  --ll-ink: var(--dsh-tasks-ink); --ll-pencil: var(--dsh-tasks-muted); --ll-pencil-mark: var(--dsh-tasks-line);
+  --ll-focus: var(--dsh-tasks-focus); --ll-marker: var(--dsh-tasks-focus); --ll-ink-you: var(--dsh-tasks-focus);
+  --ll-hi-select: var(--dsh-tasks-highlight); --ll-paper: var(--dsh-tasks-paper); --ll-input-fill: var(--dsh-tasks-paper);
+  --ll-slip: var(--dsh-tasks-paper); --ll-hi: var(--dsh-tasks-highlight); --ll-rule-blue: var(--dsh-tasks-line);
+}
+.dsh-tasks-date-field { grid-column: 1/-1; display: grid; grid-template-columns: minmax(0,18rem); gap: 4px; }
+.dsh-tasks-date-control { position: relative; min-width: 0; }
+.dsh-tasks-root .dsh-tasks-date-field [data-slot=date-picker] { position: relative; isolation: isolate; display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; min-height: 36px; padding: 6px 12px; background: var(--dsh-tasks-paper); color: var(--dsh-tasks-ink); border: 0; font: inherit; text-align: start; cursor: pointer; }
+.dsh-tasks-date-field [data-slot=date-picker] span { display: inline-flex; }
+.dsh-tasks-date-field [data-slot=date-picker] > span:first-of-type { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dsh-tasks-date-control[data-has-value] [data-slot=date-picker] > span:first-of-type { margin-inline-end: 28px; }
+.dsh-tasks-date-control .dsh-tasks-date-clear { position: absolute; inset-inline-end: 34px; top: 50%; transform: translateY(-50%); display: grid; place-items: center; width: 28px; height: 28px; padding: 0; }
+.dsh-tasks-date-popup { box-sizing: border-box; width: min(18rem, var(--radix-popover-content-available-width)); max-height: var(--radix-popover-content-available-height); overflow: auto; padding: 9px 10px; background: var(--dsh-tasks-paper); color: var(--dsh-tasks-ink); border: 1px solid var(--dsh-tasks-line); border-radius: 5px 8px 6px 4px; box-shadow: 0 5px 16px var(--dsh-tasks-shadow); font: inherit; }
+.dsh-tasks-drawer [data-radix-popper-content-wrapper]:has(.dsh-tasks-date-popup) { z-index: 12 !important; }
+.dsh-tasks-date-popup button, .dsh-tasks-date-control .dsh-tasks-date-clear { font: inherit; color: inherit; background: transparent; border: 0; cursor: pointer; border-radius: 4px; }
+.dsh-tasks-date-popup button { padding: 4px 8px; }
+.dsh-tasks-date-control .dsh-tasks-date-clear:disabled { color: var(--dsh-tasks-muted); cursor: default; }
+.dsh-tasks-date-popup button:hover, .dsh-tasks-date-field .dsh-tasks-date-clear:hover { background: var(--dsh-tasks-highlight); }
+.dsh-tasks-date-popup [data-slot=date-picker-presets] { display: flex; gap: 5px; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid var(--dsh-tasks-rule); }
+.dsh-tasks-date-popup .rdp-month { display: grid; grid-template-columns: 32px minmax(0,1fr) 32px; grid-template-areas: 'prev caption next' 'grid grid grid'; }
+.dsh-tasks-date-popup .rdp-button_previous { grid-area: prev; }
+.dsh-tasks-date-popup .rdp-button_next { grid-area: next; }
+.dsh-tasks-date-popup .rdp-month_caption { grid-area: caption; text-align: center; align-content: center; font-weight: 600; }
+.dsh-tasks-date-popup [data-slot=calendar-grid] { grid-area: grid; position: relative; isolation: isolate; margin: 6px 2px; }
+.dsh-tasks-date-popup table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.dsh-tasks-date-popup th { height: 26px; font-size: .85em; color: var(--dsh-tasks-muted); }
+.dsh-tasks-date-popup td { position: relative; text-align: center; padding: 0; }
+.dsh-tasks-date-popup [data-slot=calendar-day] { position: relative; isolation: isolate; min-height: 30px; width: calc(100% - 4px); margin: 2px; padding: 0; font-variant-numeric: tabular-nums; }
+.dsh-tasks-date-popup .rdp-outside { color: var(--dsh-tasks-muted); }
+.dsh-tasks-date-field [data-layer]:not([data-layer=rest]), .dsh-tasks-date-popup [data-layer]:not([data-layer=rest]) { opacity: 0; }
+.dsh-tasks-date-popup button:focus-visible, .dsh-tasks-date-field button:focus-visible { outline: 2px solid var(--dsh-tasks-focus); outline-offset: -2px; }

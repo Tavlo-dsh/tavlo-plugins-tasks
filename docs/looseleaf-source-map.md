@@ -71,6 +71,27 @@ utils → clsx + tailwind-merge
 
 展示组件只接收 props，不访问 Connection、Session 或 Storage。三个组件继续共享 `require('react')` 的宿主实例；新增运行时 npm 依赖、CDN、字体和编译步骤均为零。胶带和高亮伪元素使用 `pointer-events: none`，不新增可聚焦节点。后续按用户要求移除外观偏好与切换，所有表单继续保留稳定的组件类型。删除功能另将任务数据升级为 version 4，并增加 remove 事件；每个 Client 仍只有一条任务 SSE，详见 [交互调整记录](task-controls-verification.md)。
 
+## 详情确认与启动对话框
+
+两个纸面弹框在 `client.js` 中共用 `Modal`、`DialogSticker` 和已有的 `PAPER_SLIP` 标题纸纹。以同一固定提交的 `src/components/ui/alert-dialog.tsx`（危险提示、标题/描述、取消与确认分区）和 `src/components/ui/dialog.tsx`（纸张内容框）为参考，用原生 `dialog.showModal()` 与宿主 React 18 实现；未引入 Radix、Ink hooks、字体或远程资源。
+
+`DialogSticker` 的五条 SVG 路径摘自 `src/lib/ink/art/stickers/office-desk.ts` 的 `notebook.small`（源文件 SHA-256：`c9bde0121f52074853ffbb2148a4161c227ecc232f7baa8b85f98ea5a6a89029`）。保留 64 × 64 画布与路径，用本地主题色和静态线宽替代上游画笔；贴纸仅装饰，不进入焦点顺序或无障碍名称。署名及完整 MIT 许可见 [`licenses/looseleaf-MIT.txt`](../licenses/looseleaf-MIT.txt)。
+
+## 第一批：纸面主题下的任务编辑控件
+
+仅新建和详情抽屉声明 `.dsh-tasks-editor-drawer`。当有效任务外观为「纸面」时，[任务端适配器](../calendar/task-paper-ink.jsx)复用 Looseleaf `calm` 绘制 recipe。标题、描述、标签、优先级、工作区、模型共用上游 `drawFieldFrame`；日期继续使用 `DatePicker` / `drawSelectFrame`，与其他字段共用描边、纸色与焦点规范。按钮、状态、页签和空附件框使用下表中的上游 recipe；下拉和日期浮层共用主题色、边框、圆角和阴影。DSH `Input`、宿主按钮、原生 `textarea` 和文件输入，以及插件原有的可搜索选择器保留交互与焦点。没有引入上游 React 19 组件壳、全局 `InkProvider`、Tailwind 或字体。
+
+新增 recipe 原样取自同一个固定提交，位于 [本地 Looseleaf recipe 目录](../calendar/vendor/looseleaf/lib/ink/recipes/)；沿用其 [MIT 许可](../calendar/vendor/looseleaf/LICENSE)。历史审查清单另保留，不代表本轮新增文件均在旧清单中。
+
+| 上游 `src/lib/ink/recipes/` 下的文件 | SHA-256 |
+| --- | --- |
+| `button-ink.ts` | `230529cd7990a295f6c4b0ad4a5b0e345e9489d0031c5d7c8bfa3d5e41ec9e53` |
+| `badge-ink.ts` | `45676fc2300f7b07d1c9cf59b43192fa34bbb35bf5e76da08a1904967e99b1d9` |
+| `tabs-ink.ts` | `29d569eb6c646d78abecb7628df3f853efad828fd45c18abb4814624486cb169` |
+| `empty-ink.ts` | `d189ab41359c099259ce1fb7acbce90ebb948da2b46bb953fe017069579c1b01` |
+
+绘制层不接收鼠标和键盘事件，也不参与控件的可访问名称。非纸面时隐藏绘制层，强制色彩下用系统边框和高亮代替绘制层。切换外观只改变样式，不重挂载输入框、选择器或抽屉。独立纸面主题提供 `--dsh-looseleaf-*` 变量，仅发给这两个抽屉；任务端保留旧主题版本的变量回退。详见[主题契约](../../tavlo-plugins-paper-theme/docs/host-adapter.md)。
+
 ## 复核与更新
 
 运行 `node scripts/looseleaf-audit.mjs <上游快照目录>` 可离线复核全部哈希及本地许可证；省略目录则从锁定提交下载后校验，只用于开发审查。脚本无需第三方依赖，不参与安装或运行流程。

@@ -162,7 +162,7 @@ try {
     fixture.count = () => document.querySelectorAll('article[data-task-id]').length
     fixture.load = async count => {
       source.setQuery('')
-      if (!source.getSnapshot().showAllDone) source.toggleDone()
+      if (!source.getSnapshot().showAllDone['stage:done']) source.toggleDone()
       fixture.tasks = fixture.makeTasks(count)
       await source.refresh()
       for (let i = 0; i < count; i++) if (fixture.tasks[i].activeSessionId) fixture.emit({ type: 'status', taskId: fixture.tasks[i].id,

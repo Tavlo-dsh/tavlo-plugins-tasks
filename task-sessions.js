@@ -1,4 +1,7 @@
 /** Published Session APIs: durable launch recovery and passive board status. */
+import { z } from 'zod'
+import { sessionId as sessionIdSchema } from './task-schema.js'
+
 function refusal(code, message, details = {}) {
   return Object.assign(new Error(message), { code, details, taskSessionFailure: true })
 }
@@ -25,6 +28,9 @@ export function createTaskSessions(ctx) {
   }
   return {
     async checkLaunch(task, input) {
+      if (input.forkFromSessionId && typeof ctx.get('sessionController')?.fork !== 'function') {
+        throw refusal('tasks/fork-unavailable', 'Native session fork is unavailable')
+      }
       controller()
       if (input.agentPreset) {
         const presets = await remote(() => ctx.get('agentPresets')?.list())
@@ -33,9 +39,45 @@ export function createTaskSessions(ctx) {
       if (!task.activeSessionId) return
       if (!input.replaceActive) throw refusal('tasks/session-exists', 'Open the existing conversation or explicitly start a new one')
       await remote(async () => {
-        const current = await state(task.activeSessionId)
+        let current
+        try { current = await state(task.activeSessionId) }
+        catch (error) {
+          if (!input.forkFromSessionId) throw error
+          throw refusal('tasks/fork-unavailable', 'Could not read the fork source')
+        }
+        if (!current && input.forkFromSessionId) throw refusal('tasks/fork-unavailable', 'Fork source no longer exists')
         if (current && (current.running || current.pendingInput.length || current.queue?.length)) throw refusal('tasks/session-busy', 'The existing conversation is still active')
       })
+    },
+    async fork(parent) {
+      const service = ctx.get('sessionController')
+      if (typeof service?.fork !== 'function') throw refusal('tasks/fork-unavailable', 'Native session fork is unavailable')
+      let child, attachWorkspaceId
+      try { child = (await service.fork({ sessionId: parent, allowMigration: false }))?.sessionId }
+      catch (error) {
+        if (['session/not-found', 'session/fork-unavailable', 'session/migration-required'].includes(error?.code)) {
+          throw refusal('tasks/fork-unavailable', 'Source cannot be forked', { causeCode: error.code })
+        }
+        // Only this specific Host failure identifies an already-created child.
+        if (error?.code === 'session/workspace-attach-failed' && z.uuid().safeParse(error.details?.workspaceId).success) {
+          child = error.details.sessionId
+          attachWorkspaceId = error.details.workspaceId
+        }
+      }
+      if (!sessionIdSchema.safeParse(child).success || child === parent) {
+        throw refusal('tasks/fork-unknown', 'Fork may have created a conversation; no first message was sent')
+      }
+      return { sessionId: child, ...(attachWorkspaceId ? { attachWorkspaceId } : {}) }
+    },
+    async repairForkAttachment({ sessionId, attachWorkspaceId }) {
+      try {
+        const workspace = ctx.get('workspaceRegistry')?.get(attachWorkspaceId)
+        if (!workspace) throw new Error('Missing workspace')
+        if (!workspace.sessionIds.includes(sessionId)) await workspace.attachSession(sessionId)
+      } catch { throw refusal('tasks/fork-attach-failed', 'Could not attach the saved fork to its workspace') }
+    },
+    async forkWorkspace(sessionId) {
+      return remote(() => ctx.get('workspaceRegistry')?.list().find(workspace => workspace.sessionIds.includes(sessionId))?.id)
     },
     async create(receipt) {
       await remote(async service => {
@@ -58,9 +100,26 @@ export function createTaskSessions(ctx) {
       if (archived(sessionId)) throw refusal('tasks/session-archived', 'Unarchive the saved conversation before resuming')
       if (input.model) await remote(service => service.selectModel({ sessionId, ...input.model }))
     },
-    async prompt({ sessionId, input }) {
+    async imageParts(images) {
+      const attachments = ctx.get('attachments'), limits = attachments?.imageLimits
+      if (!limits || typeof attachments.readImage !== 'function') throw refusal('tasks/prompt-image-unavailable', 'Image storage unavailable')
+      if (images.length > limits.maxImagesPerMessage || images.reduce((sum, ref) => sum + ref.bytes, 0) > limits.maxMessageImageBytes
+        || images.some(ref => ref.bytes > limits.maxImageBytes || !limits.mediaTypes.includes(ref.mediaType))) {
+        throw refusal('tasks/prompt-image-rejected', 'Images exceed the session attachment limits')
+      }
+      const parts = []
+      for (const ref of images) {
+        try {
+          const { data } = await attachments.readImage(ref, signal)
+          if (!(data instanceof Uint8Array) || data.byteLength !== ref.bytes) throw new Error('Incomplete attachment')
+          parts.push({ type: 'image', mediaType: ref.mediaType, data: Buffer.from(data).toString('base64') })
+        } catch { throw refusal('tasks/prompt-image-unavailable', 'Could not read saved task image') }
+      }
+      return parts
+    },
+    async prompt({ sessionId, input }, images = []) {
       if (archived(sessionId)) throw refusal('tasks/session-archived', 'Unarchive the saved conversation before resuming')
-      await remote(service => service.prompt({ sessionId, requestId: 'tasks.' + input.requestId, mode: 'queue', content: [{ type: 'text', text: input.content }] }, signal))
+      await remote(service => service.prompt({ sessionId, requestId: 'tasks.' + input.requestId, mode: 'queue', content: [{ type: 'text', text: input.content }, ...images] }, signal))
     },
     /** One Host observer, independent of browser count; pending-input changes also get sampled. */
     async watch(store, intervalMs) {

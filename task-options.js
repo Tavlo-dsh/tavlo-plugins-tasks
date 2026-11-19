@@ -6,6 +6,7 @@ export function createTaskOptions(ctx) {
     let workspaceStatus = 'unavailable'
     let modelStatus = 'unavailable'
     let modelFailures = 0
+    let defaultModel
     const registry = ctx.get('workspaceRegistry')
     const controller = ctx.get('sessionController')
     if (registry) {
@@ -24,14 +25,18 @@ export function createTaskOptions(ctx) {
             ...(model.reasoning ? { reasoning: model.reasoning } : {}),
           })),
         }))
+        const selected = catalog.default
+        const effective = groups.find(group => group.id === selected?.provider)?.models.find(model => model.id === selected.model)
+        if (effective) defaultModel = { provider: selected.provider, model: selected.model,
+          ...(effective.reasoning?.efforts?.some(effort => effort.id === selected.reasoningEffort) ? { reasoningEffort: selected.reasoningEffort } : {}) }
         modelFailures = catalog.failures.length
         modelStatus = 'ready'
       } catch { modelStatus = 'error' }
     }
     let presets = []
-    try { presets = (await ctx.get('agentPresets')?.list() ?? []).filter(row => !row.broken).map(({ id, name }) => ({ id, name: name ?? id })) }
+    try { presets = (await ctx.get('agentPresets')?.list() ?? []).filter(row => !row.broken).map(({ id, name }) => ({ id, ...(name ? { name } : {}) })) }
     catch { /* The default preset remains selectable; explicit presets must validate at launch. */ }
-    return { workspaces, groups, workspaceStatus, modelStatus, modelFailures, presets }
+    return { canFork: typeof controller?.fork === 'function', workspaces, groups, workspaceStatus, modelStatus, modelFailures, presets, ...(defaultModel ? { defaultModel } : {}) }
   }
 
   async function validate(input) {

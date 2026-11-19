@@ -47,7 +47,7 @@ export function createTaskEvents(store, config) {
       unsubscribe = await store.watch(event => {
         send('event: tasks\ndata: ' + JSON.stringify(event) + '\n\n')
         if (event.type === 'unavailable') finish()
-      }, request.signal)
+      }, request.signal, request.headers.get('x-tavlo-board') === '1')
     } catch (error) {
       finish()
       return Response.json({ code: error.code ?? 'tasks/unavailable' }, { status: 503 })
