@@ -7,6 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { WebSocketServer } from 'ws'
+import { registerTaskAgentTools } from '../task-mcp.js'
 import { callTask, mountHost, readTaskDatabase } from './fixtures.mjs'
 
 const path = '/api/dsh-plugin-tasks/mcp'
@@ -125,7 +126,8 @@ test('DSH agents get native tools when the registry is present, without configur
   const client = await connect(host)
   try {
     const tools = (await client.listTools()).tools
-    assert.deepEqual([...definitions.keys()].sort(), tools.map(tool => tool.name).sort())
+    assert(definitions.has('tasks_submit_delivery'))
+    assert.deepEqual([...definitions.keys()].filter(name => !['tasks_submit_delivery', 'tasks_recover_creation_session'].includes(name)).sort(), tools.map(tool => tool.name).sort())
     assert.deepEqual(value(await client.callTool({ name: 'tasks_get', arguments: { taskId: result.value.task.id } })).task, result.value.task)
     assert.equal(value(await client.callTool({ name: 'tasks_history', arguments: { taskId: result.value.task.id } })).events[0].source, 'agent')
   } finally { await client.close() }
@@ -134,6 +136,82 @@ test('DSH agents get native tools when the registry is present, without configur
   const disabled = await mountHost(t, { config: { mcpEnabled: false } })
   await disabled.own(disabled.ctx.plugin(ScopedTools)).await()
   assert.equal(definitions.size, 0)
+})
+
+test('only native doing creates link the calling conversation; board moves and external creates do not claim it', async t => {
+  const host = await mountHost(t)
+  const tools = new Map()
+  registerTaskAgentTools({ register: tool => tools.set(tool.name, tool) }, host.ctx.get('taskService'))
+  const sessionId = `session-${crypto.randomUUID()}`, other = `session-${crypto.randomUUID()}`
+  const native = (name, args, id = sessionId) => tools.get(name).execute(args, { agent: { id }, signal: new AbortController().signal })
+  const input = (requestId, fields = {}) => ({ title: requestId, requestId, ...fields })
+  const task = result => { assert(result.ok, JSON.stringify(result)); return result.value.task }
+
+  const board = (await callTask(host.rpc, 'edit-columns', { action: 'add', expectedRevision: 1, stage: 'doing', name: 'Coding' })).value.board
+  const doing = input('native-in-column', { columnId: board.columns.at(-1).id }) // stage inferred by the service
+  const current = task(await native('tasks_create', doing))
+  assert.equal(current.activeSessionId, sessionId)
+  const backlog = task(await native('tasks_create', input('native-backlog')))
+  assert.equal(backlog.activeSessionId, undefined)
+  const staged = task(await native('tasks_set_stage', { taskId: backlog.id, expectedRevision: backlog.revision, stage: 'doing' }))
+  assert.equal(staged.activeSessionId, undefined)
+  const moved = task(await native('tasks_move', { taskId: current.id, expectedRevision: current.revision, columnId: 'stage:doing' }, other))
+  assert.equal(moved.activeSessionId, sessionId)
+  const spoof = input('spoofed-create', { stage: 'doing', sessionId: other })
+  assert.equal((await native('tasks_create', spoof)).error?.code, 'tasks/bad-request')
+
+  const client = await connect(host)
+  try {
+    const externalCreate = (await client.listTools()).tools.find(tool => tool.name === 'tasks_create')
+    assert.equal(externalCreate.inputSchema.properties.sessionId, undefined)
+    assert.equal(tools.get('tasks_create').parameters.properties.sessionId, undefined)
+    const external = value(await client.callTool({ name: 'tasks_create', arguments: input('mcp-doing', { stage: 'doing' }) })).task
+    assert.equal(external.activeSessionId, undefined)
+    assert((await client.callTool({ name: 'tasks_create', arguments: spoof })).isError)
+  } finally { await client.close() }
+})
+
+test('legacy recovery requires matching Host events; does not claim an arbitrary or edited task', async t => {
+  const windows = new Map(), sessionId = `session-${crypto.randomUUID()}`, operator = crypto.randomUUID()
+  const host = await mountHost(t, { sessionQuery: { readEvent: async ({ seq, sessionId: requested, before, after }) => {
+    assert.equal(requested, sessionId); assert.equal(before, 0); assert.equal(after, 0)
+    return windows.get(seq)
+  } } })
+  const tools = new Map(), service = host.ctx.get('taskService')
+  registerTaskAgentTools({ register: tool => tools.set(tool.name, tool) }, service)
+  const recover = (data, id = operator) => tools.get('tasks_recover_creation_session').execute(data, { agent: { id } })
+  const original = { title: 'Working', requestId: 'legacy-original', stage: 'doing' }
+  const task = (await service.execute('create', original, undefined, 'agent')).value.task
+  const input = { taskId: task.id, expectedRevision: 1, sessionId, callSeq: 3, resultSeq: 4 }
+  const time = Date.parse(task.createdAt), callId = 'call_0123'
+  const context = { turn: 1, step: 2 }
+  const event = (seq, type, fields) => ({ seq, type, time, ...fields })
+  const call = event(3, 'tool/call', { data: { ...context, name: 'tasks_create', callId, arguments: JSON.stringify(original) } })
+  const result = event(4, 'tool/result', { sourceEventSeqs: [3], surfaceOp: 'append', data: { ...context, message: {
+    id: 'result_1', role: 'tool', toolCallId: callId, source: { kind: 'tool', callId }, isError: false,
+    content: [{ type: 'text', text: JSON.stringify({ ok: true, value: { task } }) }],
+  } } })
+  for (const target of [call, result]) windows.set(target.seq, { target, session: { id: sessionId }, events: [target], startSeq: target.seq, endSeq: target.seq, inheritedEventCount: 0 })
+  assert.equal((await recover(input, 'not-a-session')).error.code, 'tasks/creation-unverified')
+  assert.equal((await recover({ ...input, resultSeq: 5 })).error.code, 'tasks/creation-unverified')
+  assert.equal((await recover({ ...input, expectedRevision: 2 })).error.code, 'tasks/revision-conflict')
+  assert.deepEqual((await service.execute('get', { taskId: task.id })).value.task, task)
+  const note = await service.execute('comment', { taskId: task.id, requestId: 'progress-note', text: 'Ready for verification' }, undefined, 'agent')
+  assert.equal(note.value.task.revision, 2)
+  assert.equal((await recover(input)).error.code, 'tasks/revision-conflict')
+  const fixed = await recover({ ...input, expectedRevision: 2 })
+  assert(fixed.ok, JSON.stringify(fixed)); assert.equal(fixed.value.task.activeSessionId, sessionId)
+  assert.equal(fixed.value.task.launch, undefined); assert.equal(fixed.value.task.revision, 3); assert.equal(fixed.value.task.commentCount, 1)
+  const log = (await service.execute('history', { taskId: task.id })).value.events
+  assert.deepEqual(log.map(e => e.kind), ['bound', 'comment', 'created']); assert.equal(log[1].text, 'Ready for verification')
+  assert.deepEqual((await recover(input)).value.task, fixed.value.task)
+  assert.deepEqual((await service.execute('create', original, undefined, 'agent', operator)).value.task, fixed.value.task)
+  assert.equal((await recover({ ...input, expectedRevision: 3, sessionId: operator })).error.code, 'tasks/creation-unverified')
+  const manual = (await service.execute('create', { ...original, requestId: 'manual' })).value.task
+  assert.equal((await recover({ ...input, taskId: manual.id })).error.code, 'tasks/creation-unverified')
+  const edited = (await service.execute('create', { ...original, requestId: 'legacy-edited' }, undefined, 'agent')).value.task
+  await service.execute('update', { taskId: edited.id, expectedRevision: 1, requestId: 'edited-title', patch: { title: 'Edited' } })
+  assert.equal((await recover({ ...input, taskId: edited.id, expectedRevision: 2 })).error.code, 'tasks/creation-unverified')
 })
 
 test('MCP retains owner and Origin fences, supports disabling, and removes its route on unload', async t => {

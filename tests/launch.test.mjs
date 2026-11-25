@@ -435,7 +435,7 @@ test('recovered launch stays on the board until the user opens its conversation'
   assert.deepEqual(opened, [])
   const bound = second.tasks.getSnapshot().tasks.find(row => row.id === task.id)
   const board = second.render()
-  assert(!board.includes('启动任务'))
+  assert(!board.includes('开始任务'))
   assert(board.includes('打开对话'))
   assert(board.includes('标记完成'))
   second.tasks.openSession(bound.activeSessionId)

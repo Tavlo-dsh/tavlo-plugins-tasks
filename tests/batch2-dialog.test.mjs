@@ -6,9 +6,9 @@ import React from 'react'
 
 // Exercise the source factory (not yesterday's built bundle) without adding public exports.
 const source = await readFile(new URL('../client.js', import.meta.url), 'utf8')
-function harness() {
+function harness({ desktop = false } = {}) {
   let active
-  const detailHooks = [], descriptionHooks = [], calls = []
+  const detailHooks = [], descriptionHooks = [], criteriaHooks = [], prereqHooks = [], activityHooks = [], calls = []
   function render(fn, props, slots) {
     active = { slots, index: 0 }
     try { return fn(props) } finally { active = undefined }
@@ -19,7 +19,7 @@ function harness() {
     return [slots, index]
   }
   // No DOM is mounted here; focus effects are covered by the browser probe.
-  const hooks = { ...React, useId: () => 'confirm-id', useLayoutEffect() {}, useRef(initial) {
+  const hooks = { ...React, useId: () => 'confirm-id', useEffect() {}, useLayoutEffect() {}, useMemo: fn => fn(), useCallback: fn => fn, useRef(initial) {
     if (!active) return { current: initial }
     const [slots, index] = hook(() => ({ current: initial }))
     return slots[index]
@@ -28,8 +28,11 @@ function harness() {
     return [slots[index], value => { slots[index] = typeof value === 'function' ? value(slots[index]) : value }]
   } }
   const window = { navigator: { clipboard: { writeText: async value => { calls.push(['copy', value]) } } },
-    __ModuleLoader__: { load({ factory }) { factory(name => name === 'react' ? hooks : name.endsWith('ui-primitives') ? { Checkbox: 'checkbox', MarkdownText: 'markdown-text' } : {}) } } }
-  runInNewContext(source.replace('factory(require) {', 'factory(require) { window.components = () => ({CreateForm, TaskDetails, LaunchForm, McpAccessDialog});'), { window })
+    open: (...args) => calls.push(['open', ...args]), location: { hostname: '127.0.0.1', assign: url => calls.push(['navigate', url]) },
+    ...(desktop ? { isTauri: true, __TAURI_INTERNALS__: { metadata: { currentWebview: { label: 'main' } } } } : {}),
+    __ModuleLoader__: { load({ factory }) { factory(name => name === 'react' ? hooks : name.endsWith('ui-primitives')
+      ? { Checkbox: 'checkbox', MarkdownText: 'markdown-text', MarkdownDelegateProvider: 'markdown-delegate' } : {}) } } }
+  runInNewContext(source.replace('factory(require) {', 'factory(require) { window.components = () => ({CreateForm, TaskDetails, LaunchForm, McpAccessDialog});'), { window, URL })
   const { CreateForm, TaskDetails, LaunchForm, McpAccessDialog } = window.components()
   const actions = new Proxy({}, { get: (_, method) => (...args) => calls.push([method, ...args]) })
   const task = { id: 'task', title: 'Task', stage: 'todo', revision: 1 }, options = { groups: [], workspaces: [] }
@@ -41,6 +44,25 @@ function harness() {
       const description = component(fields.type(fields.props), 'TaskDescription')
       assert(description, 'the shared editor renders TaskDescription')
       return render(description.type, description.props, descriptionHooks)
+    },
+    criteria(tree) {
+      const fields = component(tree, 'TaskEditorFields')
+      const node = component(fields.type(fields.props), 'TaskAcceptanceCriteria')
+      assert(node, 'the shared editor renders TaskAcceptanceCriteria')
+      return render(node.type, node.props, criteriaHooks)
+    },
+    prerequisites(tree) {
+      const fields = component(tree, 'TaskEditorFields')
+      const node = component(fields.type(fields.props), 'TaskPrerequisites')
+      return node ? render(node.type, node.props, prereqHooks) : null
+    },
+    activity(tree) {
+      const node = component(tree, 'Activity')
+      return node ? render(node.type, node.props, activityHooks) : null
+    },
+    delivery(tree) {
+      const node = component(tree, 'DeliverySection')
+      return node ? node.type(node.props) : null
     },
     launch(form, extra) { return LaunchForm({ ...props, form: { content: 'First message', ...form }, ...extra }) },
     access(manage) {
@@ -66,24 +88,32 @@ test('Create and detail share task editor layout without sharing write or attach
   const draftFields = component(create, 'TaskEditorFields'), detailFields = component(detail, 'TaskEditorFields')
   assert.equal(draftFields.type, detailFields.type)
   assert.equal(component(create, 'TaskDrawer').props.editorInk, true)
-  assert.equal(component(detail, 'TaskDrawer').props.editorInk, true)
-  const inspect = fields => {
+  const detailDrawer = component(detail, 'TaskDrawer')
+  assert.equal(detailDrawer.props.editorInk, true)
+  assert.equal(detailDrawer.props.headingNode?.type.name, 'DetailHeaderTitle')
+  const inspect = (fields, expectTitle) => {
     const layout = fields.type(fields.props)
     const fieldset = nodes(layout).find(el => el.props.className?.includes('dsh-tasks-task-fields'))
-    const order = React.Children.toArray(fieldset.props.children).map(el => el.type === 'label' ? el.props.children[1].props.name : el.type.name)
-    assert.deepEqual(order, ['title', 'TaskDescription', 'Properties', 'PreferenceFields'])
+    const children = React.Children.toArray(fieldset.props.children)
+    const order = children.map(el => el.type === 'label' ? el.props.children[1].props.name : el.props.className === 'dsh-tasks-meta-card' ? 'metaCard' : el.type.name)
+    assert.deepEqual(order, expectTitle
+      ? ['title', 'TaskDescription', 'TaskAcceptanceCriteria', 'metaCard']
+      : ['TaskDescription', 'TaskAcceptanceCriteria', 'metaCard'])
+    const metaCard = children.find(el => el.props.className === 'dsh-tasks-meta-card')
+    assert.deepEqual(nodes(metaCard).filter(el => ['Properties', 'PreferenceFields'].includes(el.type?.name)).map(el => el.type.name), ['Properties', 'PreferenceFields'])
     assert(!component(fieldset, 'TaskImages'))
     const attachments = component(layout, 'TaskImages')
     assert(attachments)
     return { fieldset, attachments }
   }
-  const draftLayout = inspect(draftFields), detailLayout = inspect(detailFields)
+  const draftLayout = inspect(draftFields, true), detailLayout = inspect(detailFields, false)
   assert.equal(draftLayout.fieldset.props.disabled, true)
   assert.equal(draftLayout.attachments.props.locked, true)
   assert.equal(detailLayout.fieldset.props.disabled, false)
   assert.equal(detailLayout.attachments.props.task, ui.task)
   assert.equal(submit(create).props.disabled, true)
   assert(button(detail, 'saveDetails'))
+  assert(button(detail, 'discardEdits'))
   assert(!button(detail, 'launch'))
 })
 
@@ -128,6 +158,21 @@ test('Draft description edits inline, previews nonblank Markdown, and still subm
   assert.equal(submit(create).props.disabled, false)
   send(create)
   assert.deepEqual(ui.calls, [['editForm', 'brief', brief], ['create']])
+})
+
+test('Task description delegates safe external links to the desktop shell or a Web tab', () => {
+  const href = 'https://www.tapd.cn/123/item?source=tasks#detail'
+  for (const desktop of [false, true]) {
+    const ui = harness({ desktop })
+    ui.task.brief = `[Open in TAPD](<${href}>)`
+    const tree = ui.description(ui.details(undefined, { writable: false }))
+    const { openExternalLink } = nodes(tree).find(el => el.type === 'markdown-delegate').props
+    for (const unsafe of ['javascript:alert(1)', 'https://user@example.com/', 'https://[invalid/', '//example.com/']) openExternalLink(unsafe)
+    openExternalLink(href)
+    openExternalLink('http://127.0.0.1:5000/')
+    assert.deepEqual(ui.calls, [desktop ? ['navigate', href] : ['open', href, '_blank', 'noopener,noreferrer'],
+      ['open', 'http://127.0.0.1:5000/', '_blank', 'noopener,noreferrer']])
+  }
 })
 
 test('Detail description defaults to read mode; switching modes preserves edits for Save', () => {
@@ -288,4 +333,75 @@ test('MCP dialog copies one-time config and requires confirmation to replace or 
   assert(!active)
   assert(button(reopened.render(), 'mcpGenerate'))
   assert.deepEqual(operations, ['status', 'generate', 'generate', 'status', 'revoke'])
+})
+
+test('Detail header edits title inline, hides clean secondary footers, and keeps dirty save bar on all tabs', () => {
+  const ui = harness(), board = { columns: [{ id: 'stage:todo', stage: 'todo' }], labels: [] }
+  const cleanDetail = ui.details(undefined, { board, view: 'detailTab' })
+  const headerNode = component(cleanDetail, 'TaskDrawer').props.headingNode
+  const renderedHeader = headerNode.type(headerNode.props)
+  const titleInput = nodes(renderedHeader).find(el => el.type === 'textarea' && el.props.name === 'title')
+  assert.equal(titleInput.props.value, 'Task')
+  titleInput.props.onChange({ target: { value: 'First line\r\nSecond line' } })
+  assert.deepEqual(ui.calls, [['editDetails', 'title', 'First line Second line']])
+
+  // Clean details tab shows primary launch action, while clean activity/delivery omit the form footer.
+  assert(button(cleanDetail, 'launch'))
+  for (const view of ['activity', 'deliveryTab']) {
+    const cleanSecondary = ui.details(undefined, { board, view })
+    assert(!nodes(cleanSecondary).some(el => el.props.className?.includes('dsh-tasks-form-actions')))
+  }
+  // Dirty edits keep unsaved badge, discardEdits, and saveDetails visible across every tab.
+  for (const view of ['detailTab', 'activity', 'deliveryTab']) {
+    const dirtyTree = ui.details({ ...edit }, { board, view })
+    const drawerMeta = component(dirtyTree, 'TaskDrawer').props.meta
+    assert(nodes(drawerMeta).some(el => el.props.className === 'dsh-tasks-unsaved-pill'))
+    assert(button(dirtyTree, 'discardEdits'))
+    assert(button(dirtyTree, 'saveDetails'))
+  }
+  button(ui.details({ ...edit }, { board }), 'discardEdits').props.onClick()
+  assert(ui.calls.some(([method]) => method === 'discardDetails'))
+})
+
+test('TaskAcceptanceCriteria collapses when empty and toggles Markdown/edit in detail', () => {
+  const ui = harness()
+  const emptyTree = ui.criteria(ui.details(undefined))
+  const opener = nodes(emptyTree).find(el => el.props.onClick && nodes(el).some(child => child.props?.children === 'addCriteria'))
+  assert(opener, 'empty criteria renders disclosure trigger')
+  assert(!nodes(emptyTree).some(el => el.type?.name === 'TaskTextArea'))
+  opener.props.onClick()
+  const openedTree = ui.criteria(ui.details(undefined))
+  const textarea = nodes(openedTree).find(el => el.type?.name === 'TaskTextArea' && el.props.name === 'acceptanceCriteria')
+  assert(textarea && textarea.props.paperInk === true)
+
+  const populatedUi = harness()
+  populatedUi.task.acceptanceCriteria = '- [x] Verified behavior'
+  const readTree = populatedUi.criteria(populatedUi.details(undefined))
+  assert.equal(markdown(readTree).props.text, '- [x] Verified behavior')
+  assert(!nodes(readTree).some(el => el.type?.name === 'TaskTextArea'))
+  descriptionControl(readTree, 'editCriteria').props.onClick()
+  const editingTree = populatedUi.criteria(populatedUi.details(undefined))
+  assert(nodes(editingTree).some(el => el.type?.name === 'TaskTextArea' && el.props.name === 'acceptanceCriteria'))
+  descriptionControl(editingTree, 'descriptionPreview').props.onClick()
+  const previewTree = populatedUi.criteria(populatedUi.details(undefined))
+  assert.equal(markdown(previewTree).props.text, '- [x] Verified behavior')
+})
+
+test('TaskPrerequisites hides without candidates, collapses when empty, and renders a single PaperSelect', () => {
+  const noCandidateUi = harness()
+  assert.equal(noCandidateUi.prerequisites(noCandidateUi.details(undefined, { byId: new Map([['task', noCandidateUi.task]]) })), null)
+
+  const ui = harness()
+  const other = { id: 'other-1', title: 'Upstream task', stage: 'todo', updatedAt: '2026-11-20T00:00:00.000Z' }
+  const byId = new Map([['task', ui.task], ['other-1', other]])
+  const collapsed = ui.prerequisites(ui.details(undefined, { byId }))
+  const opener = nodes(collapsed).find(el => el.props.onClick && nodes(el).some(child => child.props?.children === 'addPrerequisites'))
+  assert(opener)
+  opener.props.onClick()
+  const opened = ui.prerequisites(ui.details(undefined, { byId }))
+  const selects = nodes(opened).filter(el => el.type?.name === 'PaperSelect')
+  assert.equal(selects.length, 1)
+  assert.equal(selects[0].props.paperInk, true)
+  assert.equal(selects[0].props.maxVisible, 40)
+  assert.equal(nodes(opened).filter(el => el.type?.name === 'TaskInput').length, 0)
 })

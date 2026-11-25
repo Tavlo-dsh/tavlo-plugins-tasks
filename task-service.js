@@ -2,7 +2,7 @@
 export function createTaskService(store) {
   return Object.freeze({
     contractVersion: 1,
-    execute: (operation, input, signal, source) => store.execute(operation, input, signal, source),
+    execute: (operation, input, signal, source, agentSessionId) => store.execute(operation, input, signal, source, agentSessionId),
     watch: (observer, signal) => store.watch(observer, signal),
     async capabilities() {
       const result = await store.execute('capabilities', {})

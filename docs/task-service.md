@@ -1,6 +1,6 @@
 # 通用任务服务、MCP 与 SQLite
 
-实现版本：`dsh-plugin-tasks 0.2.0` 工作树；服务契约 `contractVersion: 1`；SQLite domain version `8`。DSH 内置工具、HTTP 和 Host 服务共用任务队列、输入校验、版本检查、持久化和公开返回结构。
+实现版本：`dsh-plugin-tasks 0.2.4`；服务契约 `contractVersion: 1`；SQLite domain version `8`。DSH 内置工具、HTTP 和 Host 服务共用任务队列、输入校验、版本检查、持久化和公开返回结构。
 
 ### 看板列与排序（F2）
 
@@ -60,13 +60,27 @@ export function apply(ctx: Context) {
 | `update` | `{ requestId, taskId, expectedRevision, patch }` | `{ task, mutation: { requestId, appliedRevision, replayed } }` |
 | `set-stage` | `{ taskId, expectedRevision, stage }` | `{ task }` |
 | `delete` | `{ taskId, expectedRevision }` | `{ taskId, revision }` |
-| `launch` / `resume-launch` / `abandon-launch` | `launch` 可传 `includeImages: true` 将当前任务图片随首条消息发送；省略时仅发送文字。恢复时沿用首次请求。其余见[原操作输入](usage.md#存储与操作)。 | 原返回结构保持兼容 |
+| `launch` / `resume-launch` / `abandon-launch` | `launch` 传 `includeFiles: true` 时，首条消息携带当前所有任务附件（包括图片）；`includeImages: true` 单独使用时保持旧版的仅图片行为。两者均不设为 `true` 时只发送文字。恢复时沿用首次请求固定的附件。其余见[原操作输入](usage.md#存储与操作)。 | 原返回结构保持兼容 |
+
+### 在执行对话中建卡
+
+DSH 原生 `tasks_create` 在「进行中」阶段（含自定义列）建卡时，绑定宿主确认的调用会话。不会新建会话、发消息或生成启动回执。卡片的「查看进度」打开该会话，状态来自实际会话；建卡时的验收标准用于该次绑定的交付。只登记待办时请用默认 `todo`。改列、创建重试、网页和外部 MCP 建卡都不会接管会话。
+
+旧卡不按标题或所在列自动补绑。对于创建后只有进度评论、未被编辑或移动的旧「进行中」卡，所有者确认其执行对话后，可用原生 `tasks_recover_creation_session` 提供任务 ID、当前版本、会话 ID 以及原生创建调用和结果的事件序号。只有宿主核对原始事件、任务 ID 和创建时间均匹配才会恢复绑定；不会发送消息或修改其他卡。
+
+### 验收与前置任务
+
+`create` 和 `update.patch` 接受 `acceptanceCriteria`（最多 4000 字符）及 `dependencyIds`（最多 20 个不重复的任务 UUID）。用空字符串和空数组分别清除；省略不改。服务拒绝不存在的新前置项和循环依赖；被删除的旧引用仍阻止启动，需显式移除。新启动在任一前置项未完成时返回 `tasks/dependencies-blocked` 和 `details.dependencyIds`，不影响恢复已记录的启动，也不会自动启动任何任务。
+
+启动时若填写了验收标准，Host 固定该版本并随首条消息发给 Agent。DSH 原生工具 `tasks_submit_delivery` 从宿主执行上下文核对当前绑定会话（不接受调用方提供的会话 ID），提交摘要、可选验证结果、未验证事项和 HTTP(S) 证据链接；不接受带认证信息的 URL，不自动访问链接。工具不由外部 MCP 暴露。公开记录的 `delivery` 为本次绑定最新的一次提交；重试沿用同一 `requestId`，退回修改后重新提交使用新 `requestId`。旧提交摘要与验收决定可在动态中查看。
+
+仅已认证的所有者 Web RPC 可调用 `review-delivery({ taskId, expectedRevision, deliveryId, requestId, decision, feedback? })`（`decision` 为 `accept` 或 `return`，后者要求非空反馈）。接受将交付和卡片阶段一起更新；退回不发消息。`continue-delivery({ taskId, expectedRevision, deliveryId })` 才把保存的意见投递到原会话，重复请求复用宿主消息身份。未验收、已退回的交付不能靠拖拽或外部 MCP 标作完成。相关可选字段不会触发 SQLite 升版；旧版严格校验不认识新字段和动态，使用新交付功能后不要直接在同一数据库上降级。
 
 ### 任务文件
 
-Web RPC `files({ taskId? })` 返回 `{ files, limits, revision? }`。省略 `taskId` 只读取限制；`files` 列出图片与普通文件，含 `attachmentId`、`bytes`、可选 `name` 和 `mediaType`。可预览图片另含 `width` 与 `height`。`limits` 为 `null` 时宿主不支持任务文件服务；否则包含 `maxFiles`、`maxFileBytes`、`maxImageBytes` 和可预览的 `mediaTypes`。任务记录的 `fileCount` 为两类文件的总数，`imageCount` 仍只计图片。
+Web RPC `files({ taskId?, launchRequestId? })` 返回 `{ files, limits, revision?, launchRequestId? }`。省略 `taskId` 只读取限制；提供两个 ID 时返回当前未结束启动的固定附件列表，而不是任务上最新的文件。`capabilities.features.taskFileLaunch` 表示宿主已提供普通附件传递所需的会话服务。`files` 列出图片与普通文件，含 `attachmentId`、`bytes`、可选 `name` 和 `mediaType`。可预览图片另含 `width` 与 `height`。`limits` 为 `null` 时宿主不支持任务文件服务；否则包含 `maxFiles`、`maxFileBytes`、`maxImageBytes` 和可预览的 `mediaTypes`。任务记录的 `fileCount` 为两类文件的总数，`imageCount` 仍只计图片。
 
-在已认证的 Web 宿主上，`POST /api/dsh-plugin-tasks/file/upload?taskId=…&requestId=…&name=…` 接收原始文件字节，`GET /api/dsh-plugin-tasks/file?taskId=…&attachmentId=…&download=1` 下载任务中仍存在的附件。普通文件不支持内嵌；仅验证通过的图片可在省略 `download` 时内嵌。`remove-file` 接受 `{ taskId, attachmentId, requestId, expectedRevision }`，同时支持两类附件。已有图片接口与启动图片快照继续可用。
+在已认证的 Web 宿主上，`POST /api/dsh-plugin-tasks/file/upload?taskId=…&requestId=…&name=…` 接收原始文件字节，`GET /api/dsh-plugin-tasks/file?taskId=…&attachmentId=…&download=1` 下载任务中仍存在的附件。普通文件不支持内嵌；仅验证通过的图片可在省略 `download` 时内嵌。`remove-file` 接受 `{ taskId, attachmentId, requestId, expectedRevision }`，同时支持两类附件。`GET` 另可传 `launchRequestId` 读取同一待恢复启动的固定附件。普通文件在目标会话中以原生文件附件投递；暂时无法读取或暂存时不降级为纯文本发送。已有图片接口与启动图片快照继续可用。
 
 ### 从当前任务会话 Fork
 

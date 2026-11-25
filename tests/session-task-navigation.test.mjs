@@ -42,10 +42,21 @@ test('a linked session menu opens the task detail regardless of board filters an
   assert.equal(query, 'concealed')
   assert.equal(filters.priority, 'P0')
   assert.equal(workspaceFilter, 'different workspace')
-  assert.equal(collapsed.todo, true)
+  assert.equal(collapsed['stage:todo'], true)
   assert.equal(form.open, false)
   assert.equal(form.title, 'Unsaved draft')
   assert(client.render().some(node => node.props?.className?.split?.(' ').includes('dsh-tasks-drawer')))
+})
+
+test('查看进度 opens the exact already-executing session without launching', async t => {
+  const opened = []
+  const task = { ...record('ongoing', 'Already doing this', { activeSessionId: currentId }), stage: 'doing' }
+  const { client } = await fixture(t, [task], { client: { navigate: id => opened.push(id) } })
+  const buttons = client.render().filter(node => node.type === 'button')
+  const progress = buttons.find(button => button.props.children === '查看进度')
+  assert(progress); assert(!buttons.some(button => button.props.children === '开始任务'))
+  progress.props.onClick()
+  assert.deepEqual(opened, [currentId]); assert.equal(client.tasks.getSnapshot().launchForm, undefined)
 })
 
 test('multi-task menus prefer the active match, deduplicate and revalidate when clicked', async t => {

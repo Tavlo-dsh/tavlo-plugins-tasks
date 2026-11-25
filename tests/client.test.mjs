@@ -294,7 +294,7 @@ test('archived history opens the original only after confirmation and successful
   } })
   await waitForState(client.tasks, 'ready')
   client.tasks.openDetails(task.id)
-  const history = () => namedButton(client, parentSession).props.onClick()
+  const history = () => client.render().find(el => el.type === 'button' && el.props['aria-label'] === '打开对话: ' + parentSession).props.onClick()
   const dialog = () => client.render().find(el => el.type === 'dialog' && el.props.role === 'alertdialog')
   history()
   assert.equal(dialog().props['aria-label'], '恢复已归档的对话？')
@@ -708,14 +708,14 @@ test('a delayed creation replay cannot replace a newer stage response', async t 
   assert.equal(client.tasks.getSnapshot().tasks.length, 1)
 })
 
-test('completed column keeps total count while showing recent 10; expanding and collapsing preserves tasks', async t => {
+test('completed column keeps total count while showing the recent four; expanding and collapsing preserves tasks', async t => {
   const tasks = Array.from({ length: 12 }, (_, index) => record({
     id: 'task-' + index, title: 'Completed ' + index, stage: 'done', position: index,
     updatedAt: new Date(Date.UTC(2026, 10, 16, 0, index)).toISOString(),
   }))
   const client = await mountClient(t, { call: async () => ({ ok: true, value: { tasks } }) })
   await waitForState(client.tasks, 'ready')
-  assert.equal(cards(client).length, 10)
+  assert.equal(cards(client).length, 4)
   assert.equal(cards(client)[0].props['data-task-id'], 'task-11')
   assert.equal(client.render().filter(node => node.props?.className === 'dsh-tasks-count')[2].props.children, '12')
   const range = () => client.render().find(node => node.props?.className === 'dsh-tasks-done-range')
@@ -773,4 +773,237 @@ test('paper decoration is stable across refresh and list order', async t => {
   tasks = [...tasks].reverse()
   await client.tasks.refresh()
   assert.deepEqual(decoration(), before)
+})
+
+test('card cleans markdown link brief and renders external link chip and compact action button', async t => {
+  const tapdUrl = 'https://www.tapd.cn/12345/prong/stories/view/1001'
+  const task = record({
+    id: 'tapd-task-1',
+    title: 'TAPD Sync Task',
+    brief: `[Open in TAPD](<${tapdUrl}>)\n\n    主责: 开发人员。前置: 无`,
+    stage: 'todo',
+  })
+  const client = await mountClient(t, { call: async () => ({ ok: true, value: { tasks: [task] } }) })
+  await waitForState(client.tasks, 'ready')
+  const rendered = client.render()
+
+  // The card brief should NOT contain the raw markdown link
+  const briefNode = rendered.find(node => node.props?.className === 'dsh-tasks-card-brief')
+  assert(briefNode)
+  assert.equal(briefNode.props.children, '主责: 开发人员。前置: 无')
+
+  // The card should render an external link chip
+  const extLink = rendered.find(node => node.props?.className === 'dsh-tasks-card-extlink')
+  assert(extLink)
+  assert.equal(extLink.props.href, tapdUrl)
+
+  // The action button should have compact action button class
+  const actionBtn = rendered.find(node => node.props?.['data-task-next-action'] !== undefined)
+  assert(actionBtn)
+  assert(actionBtn.props.className.includes('dsh-tasks-card-action-btn'))
+})
+
+function cardSlice(rendered, taskId) {
+  const start = rendered.findIndex(node => node.props?.['data-task-id'] === taskId)
+  assert(start >= 0, `Card not found: ${taskId}`)
+  let end = rendered.length
+  for (let i = start + 1; i < rendered.length; i++) {
+    const cls = rendered[i]?.props?.className
+    if (rendered[i]?.props?.['data-task-id'] || cls === 'dsh-tasks-colfoot' || cls === 'dsh-tasks-col') {
+      end = i
+      break
+    }
+  }
+  return rendered.slice(start, end)
+}
+
+test('board phase-2 styling: merged footer, action tones, extlink arrow, bottom icon counts, done check & colfoot range', async t => {
+  const tapdUrl = 'https://www.tapd.cn/12345/prong/stories/view/2026'
+  const sessionId = '11111111-2222-4333-8444-555555555555'
+  const launchId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1'
+  const reviewId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2'
+  const resumeId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3'
+  const progressId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee4'
+  const blockedId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee5'
+  const tasks = [
+    record({
+      id: launchId,
+      title: 'Launchable Task',
+      brief: `[Open in TAPD](<${tapdUrl}>)\n\nDetailed brief`,
+      stage: 'todo',
+      priority: 'P0',
+      fileCount: 2,
+      commentCount: 3,
+      position: 0,
+    }),
+    record({
+      id: reviewId,
+      title: 'Reviewable Task',
+      stage: 'doing',
+      priority: 'P1',
+      activeSessionId: sessionId,
+      delivery: { id: '22222222-3333-4444-8555-666666666666', sessionId, status: 'pending', summary: 'Ready', submittedAt: '2026-11-16T00:00:00.000Z' },
+      position: 0,
+    }),
+    record({
+      id: resumeId,
+      title: 'Resumable Task',
+      stage: 'todo',
+      priority: 'P2',
+      launch: { phase: 'created', sessionId, input: { requestId: 'req-1', content: 'Resume launch' } },
+      position: 1,
+    }),
+    record({
+      id: progressId,
+      title: 'Running Task',
+      stage: 'doing',
+      activeSessionId: sessionId,
+      position: 1,
+    }),
+    record({
+      id: blockedId,
+      title: 'Blocked Task',
+      stage: 'todo',
+      dependencyIds: [launchId],
+      position: 2,
+    }),
+    ...Array.from({ length: 5 }, (_, index) => record({
+      id: 'task-done-' + index,
+      title: 'Done Task ' + index,
+      stage: 'done',
+      position: index,
+      updatedAt: new Date(Date.UTC(2026, 10, 16, 0, index)).toISOString(),
+    })),
+  ]
+  const client = await mountClient(t, { call: async () => ({ ok: true, value: { tasks } }) })
+  await waitForState(client.tasks, 'ready')
+  const rendered = client.render()
+
+  // 1. Merged footer wraps context & buttons; action tones match promote vs neutral
+  const launchSlice = cardSlice(rendered, launchId)
+  const footerIdx = launchSlice.findIndex(node => node.props?.className === 'dsh-tasks-card-footer')
+  assert(footerIdx >= 0)
+  const footerChildren = React.Children.toArray(launchSlice[footerIdx].props.children)
+  assert(footerChildren.some(child => child.props?.className === 'dsh-tasks-card-context'))
+  assert(footerChildren.some(child => child.props?.className === 'dsh-tasks-card-buttons'))
+
+  const toneOf = id => cardSlice(rendered, id).find(node => node.props?.['data-task-next-action'] !== undefined)?.props['data-action-tone']
+  assert.equal(toneOf(launchId), 'promote')
+  assert.equal(toneOf(reviewId), 'promote')
+  assert.equal(toneOf(resumeId), 'promote')
+  assert.equal(toneOf(progressId), 'neutral')
+  assert.equal(toneOf(blockedId), 'neutral')
+
+  // 2. External link chip omits link SVG icon and preserves arrow span
+  const extLink = launchSlice.find(node => node.props?.className === 'dsh-tasks-card-extlink')
+  assert(extLink)
+  const extChildren = React.Children.toArray(extLink.props.children)
+  assert.equal(extChildren.length, 2)
+  assert.equal(extChildren[0].props.children, 'TAPD')
+  assert.equal(extChildren[1].props.className, 'dsh-tasks-extlink-arrow')
+  assert.equal(extChildren[1].props.children, '↗')
+
+  // 3. fileCount/commentCount render inside bottom .dsh-tasks-card-counts with aria-label
+  const countsIdx = launchSlice.findIndex(node => node.props?.className === 'dsh-tasks-card-counts')
+  assert(countsIdx > footerIdx)
+  const countNodes = React.Children.toArray(launchSlice[countsIdx].props.children)
+  assert.equal(countNodes.length, 2)
+  assert.equal(countNodes[0].props['aria-label'], '任务文件: 2')
+  assert.equal(countNodes[1].props['aria-label'], '评论: 3')
+
+  // 4. Done card title has .dsh-tasks-done-check; .dsh-tasks-done-range is inside .dsh-tasks-colfoot before .dsh-tasks-add
+  const doneSlice = cardSlice(rendered, 'task-done-4')
+  const doneTitle = doneSlice.find(node => node.props?.className === 'dsh-tasks-card-title')
+  assert(React.Children.toArray(doneTitle.props.children).some(child => child.props?.className === 'dsh-tasks-done-check'))
+
+  const colHeads = rendered.filter(node => node.props?.className === 'dsh-tasks-colhead')
+  assert(!colHeads.some(head => React.Children.toArray(head.props.children).some(child => child.props?.className === 'dsh-tasks-done-range')))
+  const doneFoot = rendered.find(node => node.props?.className === 'dsh-tasks-colfoot' && node.props['data-has-range'] !== undefined)
+  assert(doneFoot)
+  const footButtons = React.Children.toArray(doneFoot.props.children)
+  assert.equal(footButtons[0]?.props.className, 'dsh-tasks-done-range')
+  assert.equal(footButtons.at(-1)?.props.className, 'dsh-tasks-add')
+
+  // 5. Priority Tag preserves tone contract and exposes data-priority; custom todo tape & rename CSS are present
+  const p0Tag = launchSlice.find(node => node.props?.['data-priority'] === 'P0' && node.props?.tone !== undefined)
+  assert(p0Tag)
+  assert.equal(p0Tag.props.tone, 'warning')
+  assert.equal(p0Tag.props.children?.props?.title, 'P0')
+  const p1Tag = cardSlice(rendered, reviewId).find(node => node.props?.['data-priority'] === 'P1' && node.props?.tone !== undefined)
+  assert(p1Tag)
+  assert.equal(p1Tag.props.tone, 'neutral')
+
+  const css = rendered.find(node => node.type === 'style').props.children
+  assert(css.includes('.dsh-tasks-col[data-stage="todo"]:not([data-column-id="stage:todo"])::before'))
+  assert(css.includes('.dsh-tasks-col-rename'))
+})
+
+test('custom column color applies data-column-color and --dsh-tasks-col-color without affecting uncolored columns', async t => {
+  const host = await mountHost(t)
+  const plainRes = await callTask(host.rpc, 'edit-columns', { expectedRevision: 1, action: 'add', stage: 'doing', name: 'Plain doing' })
+  assert.equal(plainRes.ok, true)
+  const uncoloredColumnId = plainRes.value.board.columns.at(-1).id
+
+  const coloredRes = await callTask(host.rpc, 'edit-columns', { expectedRevision: 2, action: 'add', stage: 'doing', name: '123', color: '#d96b6b' })
+  assert.equal(coloredRes.ok, true)
+  const coloredColumnId = coloredRes.value.board.columns.at(-1).id
+
+  const client = await mountClient(t, host.rpc, { fetch: host.fetchAuthenticated })
+  await until(() => client.tasks.getSnapshot().status === 'ready' && client.tasks.getSnapshot().board?.columns?.some(col => col.id === coloredColumnId))
+  const rendered = client.render()
+  const cols = rendered.filter(node => node.props?.className === 'dsh-tasks-col')
+  const coloredCol = cols.find(node => node.props['data-column-id'] === coloredColumnId)
+  const uncoloredCol = cols.find(node => node.props['data-column-id'] === uncoloredColumnId)
+  assert(coloredCol)
+  assert.equal(coloredCol.props['data-column-color'], '')
+  assert.equal(coloredCol.props.style?.['--dsh-tasks-col-color'], '#d96b6b')
+  assert(uncoloredCol)
+  assert.equal(uncoloredCol.props['data-column-color'], undefined)
+  assert.equal(uncoloredCol.props.style, undefined)
+
+  const css = rendered.find(node => node.type === 'style').props.children
+  assert(css.includes('.dsh-tasks-col[data-column-color]::before'))
+  assert(css.includes('.dsh-tasks-col[data-column-color] .dsh-tasks-colname::before'))
+})
+
+test('openForm prefills workspaceId from active concrete workspaceFilter without overwriting drafts', async t => {
+  const host = await mountHost(t, {
+    workspaces: async () => [{ id: 'ws-a', title: 'Workspace A', path: '/tmp/ws-a' }],
+  })
+  const client = await mountClient(t, host.rpc)
+  await waitForState(client.tasks, 'ready')
+  client.tasks.setWorkspaceFilter('ws-a')
+  client.tasks.openForm()
+  assert.equal(client.tasks.getSnapshot().form.workspaceId, 'ws-a')
+  client.tasks.closeForm()
+
+  // Existing draft workspace choice is preserved even when filter changes.
+  client.tasks.editForm('workspaceId', '')
+  client.tasks.editForm('title', 'Draft title')
+  client.tasks.openForm()
+  assert.equal(client.tasks.getSnapshot().form.workspaceId, '')
+  client.tasks.closeForm()
+
+  // Special sentinels ('', 'ungrouped') do not set a concrete workspaceId.
+  client.tasks.setWorkspaceFilter('ungrouped')
+  client.tasks.editForm('title', '')
+  client.tasks.openForm()
+  assert.equal(client.tasks.getSnapshot().form.workspaceId, '')
+})
+
+test('discardDetails reverts unsaved edits and clears storage without closing the detail drawer', async t => {
+  const host = await mountHost(t)
+  const { task } = (await callTask(host.rpc, 'create', { title: 'Original title', requestId: 'discard-test' })).value
+  const sessionStorage = memorySessionStorage()
+  const client = await mountClient(t, host.rpc, { sessionStorage })
+  await waitForState(client.tasks, 'ready')
+  client.tasks.openDetails(task.id)
+  client.tasks.editDetails('title', 'Edited locally')
+  assert.equal(client.tasks.getSnapshot().editor.title, 'Edited locally')
+  assert(sessionStorage.getItem('dsh-plugin-tasks:details-v1:' + task.id))
+
+  client.tasks.discardDetails()
+  assert.equal(client.tasks.getSnapshot().detailId, task.id)
+  assert.equal(client.tasks.getSnapshot().editor, undefined)
+  assert.equal(sessionStorage.getItem('dsh-plugin-tasks:details-v1:' + task.id), null)
 })

@@ -10,12 +10,12 @@ export { TaskPaperInk } from './task-paper-ink'
 const ink = { ...DEFAULT_INK_CONTEXT, density: 'calm', hasProvider: true }
 const dateIn = offset => { const date = new Date(); date.setDate(date.getDate() + offset); return date }
 
-export function TaskDatePicker({ t, value, change, paperInk }) {
+export function TaskDatePicker({ t, value, change, paperInk, label }) {
   const host = React.useRef(null), id = React.useId()
   const [open, setOpen] = React.useState(false)
   return <div className="dsh-tasks-date-field" ref={host}>
     <style>{styles}</style>
-    <label htmlFor={id}>{t('dueDate')}</label>
+    <label htmlFor={id}>{label ?? t('dueDate')}</label>
     <div className="dsh-tasks-date-control" data-task-ink={paperInk ? 'field' : undefined} data-has-value={value ? '' : undefined}>
       <PortalHost.Provider value={host}><InkContext.Provider value={ink}>
         <DatePicker id={id} name="dueDate" value={value ? new Date(value + 'T00:00:00') : undefined}

@@ -74,7 +74,8 @@ export function registerAttachmentRoutes(connection, attachments, store) {
   const filePath = '/api/dsh-plugin-tasks/file'
   connection.fetch.register({ path: filePath, methods: ['GET'], requestBody: 'buffered', async fetch(request) {
     const params = new URL(request.url).searchParams
-    const result = await store.execute('files', { taskId: params.get('taskId') }, request.signal)
+    const result = await store.execute('files', { taskId: params.get('taskId'),
+      ...(params.has('launchRequestId') ? { launchRequestId: params.get('launchRequestId') } : {}) }, request.signal)
     const ref = result.ok && result.value.files.find(file => file.attachmentId === params.get('attachmentId'))
     if (!ref) return reject(404, 'tasks/not-found')
     const image = ref.width !== undefined && ref.height !== undefined

@@ -6,6 +6,7 @@
  * TASK_DRAWER_PAPER_THEME_CLIENT (local paper theme client.js; enables Paper drawer and attachment checks),
  * TASK_DRAWER_LAYOUT_MANAGEMENT=1 (enables management modal checks in a separate fixture),
  * TASK_DRAWER_LAYOUT_EDITOR_ONLY=1 (skips the unrelated responsive board checks),
+ * TASK_DRAWER_LAYOUT_INTERACTIONS=1 (focused external-link, edit, and drag checks),
  * DSH_TASK_APPEARANCE_CLIENT (legacy override for the board appearance check only),
  * TASK_DRAWER_LAYOUT_CLIENT (source, or built for an existing lib/client.js),
  * TASK_DRAWER_LAYOUT_BUILT_CLIENT (explicit bundle path in built mode), and
@@ -24,6 +25,7 @@ const root = fileURLToPath(new URL('../', import.meta.url))
 const workspace = resolve(root, '..')
 const output = resolve(process.env.TASK_DRAWER_LAYOUT_OUTPUT || join(workspace, 'artifacts/task-drawer-layout'))
 const origin = 'http://task-drawer-layout.test'
+const externalLink = 'https://tapd-link.test/story?from=tasks#details'
 const api = '/api/dsh-plugin-tasks'
 const require = createRequire(import.meta.url)
 const report = { passed: false, isolation: 'Fresh Chromium contexts; synthetic .test origin; all requests fulfilled locally or blocked; in-memory task fixtures', checks: [], layouts: [], screenshots: [], writes: [], pageErrors: [] }
@@ -150,9 +152,9 @@ function makeFixture({ overview = false } = {}) {
     ]
     for (const row of rows) tasks.set(row.id, makeTask({ ...row, position: tasks.size }))
   }
-  const limits = { maxImages: 10, maxImageBytes: 2 * 1024 * 1024, mediaTypes: ['image/png'] }
+  const limits = { maxImages: 10, maxImageBytes: 2 * 1024 * 1024, maxFiles: 10, maxFileBytes: 2 * 1024 * 1024, mediaTypes: ['image/png'] }
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+dH1sAAAAASUVORK5CYII=', 'base64')
-  const snapshotImage = { attachmentId: 'snapshot-image', width: 1, height: 1, mediaType: 'image/png', size: png.length }
+  const snapshotImage = { attachmentId: 'snapshot-image', width: 1, height: 1, mediaType: 'image/png', bytes: png.length, size: png.length }
   const galleries = new Map([[snapshotId, []]])
   const files = new Map([[snapshotImage.attachmentId, png]])
   const ok = value => ({ ok: true, value })
@@ -209,6 +211,12 @@ function makeFixture({ overview = false } = {}) {
         return ok({ task: next })
       }
       case 'history': get(input.taskId); return ok({ events: [] })
+      case 'files': {
+        const { taskId, launchRequestId: requestId } = input
+        const task = taskId ? get(taskId) : undefined
+        if (requestId !== undefined) assert(taskId === snapshotId && requestId === launchRequestId, 'Unexpected launch snapshot request')
+        return ok({ limits, files: requestId ? [snapshotImage] : galleries.get(taskId) || [], revision: task?.revision, launchRequestId: requestId })
+      }
       case 'images': {
         const { taskId, launchRequestId: requestId } = input
         const task = taskId ? get(taskId) : undefined
@@ -224,14 +232,15 @@ function makeFixture({ overview = false } = {}) {
         report.writes.push({ operation, id, input })
         return ok({ task })
       }
+      case 'remove-file':
       case 'remove-image': {
         const task = get(input.taskId), images = galleries.get(task.id)
-        assert.equal(input.expectedRevision, task.revision, 'Fixture image removal expected the current task revision')
-        assert(input.requestId && images?.some(row => row.attachmentId === input.attachmentId), 'Invalid fixture image removal')
+        assert.equal(input.expectedRevision, task.revision, 'Fixture file removal expected the current task revision')
+        assert(input.requestId && images?.some(row => row.attachmentId === input.attachmentId), 'Invalid fixture file removal')
         const remaining = images.filter(row => row.attachmentId !== input.attachmentId)
         galleries.set(task.id, remaining)
         files.delete(input.attachmentId)
-        const next = { ...task, imageCount: remaining.length, revision: task.revision + 1 }
+        const next = { ...task, fileCount: remaining.length, imageCount: remaining.length, revision: task.revision + 1 }
         tasks.set(task.id, next)
         report.writes.push({ operation, id: task.id, input })
         return ok({ task: next })
@@ -250,14 +259,14 @@ function makeFixture({ overview = false } = {}) {
     }
   }
   function upload(params, request) {
-    const task = get(params.get('taskId')), requestId = params.get('requestId')
+    const task = get(params.get('taskId')), requestId = params.get('requestId'), name = params.get('name')
     const body = request.postDataBuffer()
     assert(requestId && request.headers()['content-type'] === 'image/png' && body?.equals(png), 'Fixture upload should contain the original PNG bytes')
     const attachmentId = 'uploaded-' + requestId
-    const images = [...(galleries.get(task.id) || []), { ...snapshotImage, attachmentId }]
+    const images = [...(galleries.get(task.id) || []), { ...snapshotImage, attachmentId, ...(name ? { name } : {}) }]
     galleries.set(task.id, images)
     files.set(attachmentId, body)
-    const next = { ...task, imageCount: images.length, revision: task.revision + 1 }
+    const next = { ...task, fileCount: images.length, imageCount: images.length, revision: task.revision + 1 }
     tasks.set(task.id, next)
     report.writes.push({ operation: 'upload', id: task.id, bytes: body.length })
     return ok({ task: next })
@@ -283,13 +292,20 @@ async function mount(context, dist, shell, inputs, fixture, language = 'en') {
   await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url())
     // No route ever uses continue()/fetch(), including unknown same-origin requests.
+    if (request.isNavigationRequest() && request.url().split('#')[0] === externalLink.split('#')[0]) {
+      return route.fulfill({ contentType: 'text/html', body: '<title>External task fixture</title>' })
+    }
     if (url.origin !== origin) return route.abort('blockedbyclient')
     try {
       if (url.pathname === '/' && request.isNavigationRequest()) return await route.fulfill({ contentType: 'text/html', body: shell.html })
       if (url.pathname === shell.entryPath) return await route.fulfill({ contentType: mime['.js'], body: shell.entryBody })
       if (url.pathname === '/fixture-theme.css') return await route.fulfill({ contentType: mime['.css'], body: shell.themeCSS })
       if ([api + '/image/upload', api + '/file/upload'].includes(url.pathname) && request.method() === 'POST') return await route.fulfill({ json: fixture.upload(url.searchParams, request) })
-      if (url.pathname === api + '/file' && request.method() === 'GET' && fixture.fileResponse) return await route.fulfill(fixture.fileResponse(url.searchParams))
+      if (url.pathname === api + '/file' && request.method() === 'GET') {
+        if (fixture.fileResponse) return await route.fulfill(fixture.fileResponse(url.searchParams))
+        const body = fixture.image(url.searchParams)
+        return await route.fulfill({ contentType: 'image/png', body, ...(url.searchParams.get('download') ? { headers: { 'Content-Disposition': 'attachment; filename="fixture.png"' } } : {}) })
+      }
       if (url.pathname === api + '/image' && request.method() === 'GET') return await route.fulfill({ contentType: 'image/png', body: fixture.image(url.searchParams) })
       const path = resolve(dist, '.' + decodeURIComponent(url.pathname)), contentType = mime[extname(path)]
       if (url.pathname.startsWith('/assets/') && path.startsWith(resolve(dist, 'assets') + sep) && contentType) {
@@ -407,10 +423,9 @@ async function mount(context, dist, shell, inputs, fixture, language = 'en') {
 
 const check = description => { report.checks.push(description); console.log('PASS: ' + description) }
 const exact = name => ({ name, exact: true })
-const images = drawer => drawer.getByRole('region', exact('Task images'))
+const images = drawer => drawer.getByRole('region', exact('Task files'))
 const imageList = drawer => images(drawer).locator('ul.dsh-tasks-image-grid').and(images(drawer).getByRole('list'))
-// Built mode can still be pointed at a client from before the rename; the Paper pass requires the new name.
-const imagePicker = drawer => images(drawer).getByRole('button', { name: /^(Add|Choose) images$/ })
+const imagePicker = drawer => images(drawer).getByRole('button', { name: /^(Add|Choose) (files|images)$/ })
 async function chooseFixtureImage(page, picker, fixture, name = 'layout-fixture.png') {
   const chooser = page.waitForEvent('filechooser')
   await picker.click()
@@ -458,7 +473,10 @@ async function selectAppearance(page, appearance, taskAppearance) {
 async function inspectLayout(drawer, mode, width, theme, viewport) {
   const fields = drawer.locator('fieldset.dsh-tasks-task-fields')
   assert.equal(await fields.count(), 1, `${mode} should have exactly one shared task fieldset`)
-  const title = fields.getByRole('textbox', exact('Title')).and(fields.locator('[name=title]'))
+  const title = mode === 'create'
+    ? fields.getByRole('textbox', exact('Title')).and(fields.locator('[name=title]'))
+    : drawer.locator('header').getByRole('textbox', exact('Title')).and(drawer.locator('header textarea[name=title]'))
+  assert.equal(await fields.locator('[name=title]').count(), mode === 'create' ? 1 : 0, `${mode}: title should be in header only for detail`)
   const description = fields.locator('.dsh-tasks-description')
   const brief = description.getByRole('textbox', { name: /^Description/ }).and(fields.locator('textarea[name=brief]'))
   const preview = description.getByRole('button', exact('Preview'))
@@ -466,28 +484,33 @@ async function inspectLayout(drawer, mode, width, theme, viewport) {
   const label = fields.getByRole('combobox', exact('Label')), priority = fields.getByRole('combobox', exact('Priority'))
   const date = fields.getByRole('button', { name: /^Due date:/ })
   const workspace = fields.getByRole('combobox', exact('Workspace')), model = fields.getByRole('combobox', exact('Model'))
-  const images = drawer.getByRole('region', exact('Task images'))
+  const images = drawer.getByRole('region', exact('Task files'))
   const sequence = [title, description, label, priority, date, workspace, model, images]
   const elements = []
   try {
     for (const control of sequence) elements.push(await control.elementHandle())
     const ordered = await drawer.evaluate((dialog, nodes) => {
-      const panel = nodes[0].closest('.dsh-tasks-detail-panel')
-      return dialog.contains(panel) && nodes.every((node, index) => panel.contains(node) &&
+      return nodes.every((node, index) => dialog.contains(node) &&
         (!index || !!(nodes[index - 1].compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)))
     }, elements)
-    assert(ordered, `${mode} must place title → description → label → priority → date → workspace → model → attachments in one body`)
+    assert(ordered, `${mode} must place title → description → label → priority → date → workspace → model → attachments in order`)
   } finally { await Promise.all(elements.map(element => element.dispose())) }
-  const [box, a, b, c, d] = await Promise.all([drawer, label, priority, workspace, model].map(rect))
+  const [box, a, b, dBox, c, d] = await Promise.all([drawer, label, priority, date, workspace, model].map(rect))
   assert(Math.abs(box.width - width) < 1 && Math.abs(box.x + box.width - viewport.width) < 1, `${mode} drawer is not ${width}px and flush with the right edge`)
-  for (const [left, right] of [[a, b], [c, d]]) {
-    if (width === 375) assert(right.y >= left.y + left.height && Math.abs(right.x - left.x) < 2, `${mode}: paired fields must stack at 375px`)
-    else assert(right.x >= left.x + left.width && Math.abs(right.y - left.y) < 2, `${mode}: paired fields must share a row at 640px`)
+  if (width === 375) {
+    for (const [left, right] of [[a, b], [b, dBox], [c, d]]) {
+      assert(right.y >= left.y + left.height && Math.abs(right.x - left.x) < 2, `${mode}: paired/property fields must stack at 375px`)
+    }
+  } else {
+    assert(b.x >= a.x + a.width && dBox.x >= b.x + b.width && Math.abs(b.y - a.y) < 4 && Math.abs(dBox.y - a.y) < 4,
+      `${mode}: label, priority, and due date must share one 3-column row at 640px`)
+    assert(d.x >= c.x + c.width && Math.abs(d.y - c.y) < 2, `${mode}: workspace and model must share a row at 640px`)
   }
   const details = await drawer.evaluate(dialog => {
     const panel = dialog.querySelector('.dsh-tasks-detail-panel:not([hidden])')
     const bounds = panel.getBoundingClientRect()
-    return { horizontalOverflow: panel.scrollWidth - panel.clientWidth, background: getComputedStyle(dialog).backgroundColor,
+    return { horizontalOverflow: Math.max(panel.scrollWidth - panel.clientWidth, dialog.scrollWidth - dialog.clientWidth),
+      background: getComputedStyle(dialog).backgroundColor,
       bodyWidth: bounds.width, textareaHeight: panel.querySelector('textarea[name=brief]')?.getBoundingClientRect().height ?? null }
   })
   assert(details.horizontalOverflow <= 1, `${mode} body overflows horizontally by ${details.horizontalOverflow}px`)
@@ -573,7 +596,7 @@ async function exercise(page, fixture, reload) {
       await expectFocus(page, opener, 'Create should restore its opener on Escape')
 
       await seed.click()
-      await expectFocus(page, titleField(detail), 'Detail should focus Title')
+      await expectFocus(page, detail.getByRole('tab', exact('Details')), 'Detail should focus active Details tab')
       const existingFields = await inspectLayout(detail, 'detail', width, theme, viewport)
       assert.equal(await existingFields.brief.count(), 0, 'Detail should start in read mode')
       await checkChecklist(existingFields.markdown)
@@ -625,8 +648,8 @@ async function exercise(page, fixture, reload) {
   const createImages = images(create)
   await chooseFixtureImage(page, imagePicker(create), fixture)
   const pending = imageList(create).getByRole('listitem').filter({ hasText: 'layout-fixture.png' })
-  await pending.getByRole('button', exact('Remove image')).waitFor()
-  await createImages.getByText('1/10 · Pending: 1', { exact: true }).waitFor()
+  await pending.getByRole('button', exact('Remove file: layout-fixture.png')).waitFor()
+  await createImages.getByText('1/10', { exact: true }).waitFor()
   assert.equal(await imageList(create).getByRole('listitem').count(), 1)
   await pending.scrollIntoViewIfNeeded()
   await screenshot(page, 'create-pending-image')
@@ -635,7 +658,7 @@ async function exercise(page, fixture, reload) {
   await create.waitFor({ state: 'hidden' })
   await detail.waitFor()
   const saved = imageList(detail).getByRole('listitem')
-  await saved.getByRole('button', exact('Image 1')).waitFor()
+  await saved.getByRole('button', exact('layout-fixture.png')).waitFor()
   await images(detail).getByText('1/10', { exact: true }).waitFor()
   assert.equal(await imageList(detail).getByRole('listitem').count(), 1)
   assert.deepEqual(report.writes.map(entry => entry.operation), ['create', 'upload'])
@@ -646,10 +669,10 @@ async function exercise(page, fixture, reload) {
   await savedImage.scrollIntoViewIfNeeded()
   await savedImage.evaluate(image => image.decode())
   await screenshot(page, 'detail-saved-image')
-  await saved.getByRole('button', exact('Remove image')).click()
+  await saved.getByRole('button', exact('Remove file: layout-fixture.png')).click()
   await imageList(detail).waitFor({ state: 'hidden' })
   await images(detail).getByText('0/10', { exact: true }).waitFor()
-  assert.deepEqual(report.writes.map(entry => entry.operation), ['create', 'upload', 'remove-image'])
+  assert.deepEqual(report.writes.map(entry => entry.operation), ['create', 'upload', 'remove-file'])
   assert.equal(report.writes[2].id, report.writes[0].id)
   await closeWithEscape(page, detail)
   await reload()
@@ -662,16 +685,20 @@ async function exercise(page, fixture, reload) {
   await page.setViewportSize({ width: 375, height: 740 })
   await seed.click()
   const detailsTab = detail.getByRole('tab', exact('Details')), activity = detail.getByRole('tab', exact('Activity'))
+  const deliveryTab = detail.getByRole('tab', exact('Agent delivery'))
+  assert.deepEqual(await detail.getByRole('tab').allTextContents(), ['Details', 'Activity', 'Agent delivery'])
   await titleField(detail).focus()
   await page.keyboard.press('Tab')
+  await expectFocus(page, detail.locator('summary.dsh-tasks-stage-pill'), 'Tab after header Title focuses header column switcher')
   const editDescription = detail.getByRole('button', exact('Edit description'))
-  await expectFocus(page, editDescription, 'Tab order should place Edit description immediately after Title')
   await detailsTab.focus()
   await page.keyboard.press('End')
-  await expectFocus(page, activity, 'End should focus Activity')
+  await expectFocus(page, deliveryTab, 'End should focus Agent delivery')
+  await page.keyboard.press('ArrowLeft')
+  await expectFocus(page, activity, 'ArrowLeft should move to Activity')
   assert.equal(await activity.getAttribute('aria-selected'), 'true')
   await detail.getByRole('tabpanel', exact('Activity')).waitFor()
-  assert(await startButton.isHidden(), 'Detail action should be hidden while Activity is selected')
+  assert.equal(await detail.locator('.dsh-tasks-form-actions').count(), 0, 'Clean Activity omits the detail action footer')
   const accepted = await detail.evaluate((dialog, base64) => {
     const transfer = new DataTransfer()
     transfer.items.add(new File([Uint8Array.from(atob(base64), char => char.charCodeAt(0))], 'ignored.png', { type: 'image/png' }))
@@ -687,10 +714,15 @@ async function exercise(page, fixture, reload) {
   await detail.getByRole('tabpanel', exact('Details')).waitFor()
   await startButton.focus()
   await page.keyboard.press('Tab')
-  const first = detail.getByRole('button', exact('Copy task ID'))
-  await expectFocus(page, first, 'Tab from the footer should wrap to the first drawer action')
+  await expectFocus(page, titleField(detail), 'Tab from the footer should wrap to the header Title input')
   await page.keyboard.press('Shift+Tab')
   await expectFocus(page, startButton, 'Shift+Tab should wrap back to the footer')
+  await detail.getByRole('button', exact('Add acceptance criteria')).click()
+  const criteriaInput = detail.locator('textarea[name=acceptanceCriteria]')
+  await criteriaInput.fill('Discardable criteria')
+  await detail.getByRole('button', exact('Discard changes')).click()
+  await startButton.waitFor()
+  assert.equal(await criteriaInput.count(), 0, 'Discarding edits reverts disclosure state cleanly')
   const date = detail.getByRole('button', { name: /^Due date:/ })
   assert.match(await date.getAttribute('aria-label'), new RegExp(fixture.date))
   const clearDate = detail.locator('.dsh-tasks-date-clear').and(detail.getByRole('button', exact('Clear date')))
@@ -744,7 +776,7 @@ async function exercise(page, fixture, reload) {
   const launch = page.locator('dialog.dsh-tasks-launch-dialog[open]')
   await launch.waitFor()
   const snapshot = images(launch)
-  await snapshot.getByText(/Images saved for this launch/).waitFor()
+  await snapshot.getByText(/Attachments saved for this launch/).waitFor()
   const item = imageList(launch).getByRole('listitem')
   assert.equal(await item.count(), 1)
   const thumbnail = item.getByRole('button', exact('Image 1'))
@@ -753,7 +785,7 @@ async function exercise(page, fixture, reload) {
   await snapshotImage.evaluate(image => image.decode())
   assert.equal(new URL(await snapshotImage.getAttribute('src'), origin).searchParams.get('launchRequestId'), fixture.launchRequestId)
   assert.equal(await imagePicker(launch).count(), 0)
-  assert.equal(await snapshot.getByRole('button', exact('Remove image')).count(), 0)
+  assert.equal(await snapshot.getByRole('button', { name: /^Remove file/ }).count(), 0)
   assert.equal(await snapshot.locator('input[type=file]').count(), 0)
   await screenshot(page, 'launch-read-only-snapshot')
   await thumbnail.click()
@@ -771,10 +803,11 @@ const paperDrawer = '.dsh-tasks-editor-drawer'
 const neutralPaperTokens = ['control-fill', 'control-line', 'control-ink', 'focus', 'radius']
 const settlePaint = page => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))))
 
-async function inspectPaperDrawer(drawer) {
-  return drawer.evaluate((dialog, tokenNames) => {
+async function inspectPaperDrawer(drawer, mode = 'create') {
+  return drawer.evaluate((dialog, { tokenNames, mode }) => {
     const aliases = {
-      title: '[name=title]', description: '[name=brief]', label: '[role=combobox][aria-label=Label]',
+      ...(mode === 'create' ? { title: '[name=title]' } : {}),
+      description: '[name=brief]', label: '[role=combobox][aria-label=Label]',
       priority: '[role=combobox][aria-label=Priority]', workspace: '[role=combobox][aria-label=Workspace]',
       model: '[role=combobox][aria-label=Model]', date: '[data-slot=date-picker]',
     }
@@ -840,7 +873,7 @@ async function inspectPaperDrawer(drawer) {
     return { tokens, surface: dialogStyle.backgroundColor, fields, attachment, empty: empty && inspect(empty, 'empty'), footer, extras, overflow,
       outsidePaperTokens: [document.body, document.querySelector('.dsh-tasks-board-view')].map(node =>
         getComputedStyle(node).getPropertyValue('--dsh-looseleaf-control-fill').trim()) }
-  }, neutralPaperTokens)
+  }, { tokenNames: neutralPaperTokens, mode })
 }
 
 function contrast(first, second) {
@@ -868,8 +901,7 @@ function checkPaperPaint(state, isPaper, tag) {
     assert(!Object.values(extras).flat().includes(true), `${tag}: Paper tab/badge ink leaked into non-Paper appearance`)
     return
   }
-  assert(!attachment.marked && !attachment.inkVisible, `${tag}: Add images must not have an Ink button frame`)
-  assert.equal(attachment.fill, 'rgba(0, 0, 0, 0)', `${tag}: resting Add images should be transparent`)
+  assert(!attachment.marked && !attachment.inkVisible, `${tag}: Add files must not have an Ink button frame`)
   for (const [name, paint] of Object.entries(fields)) {
     assert(paint.marked && paint.inkVisible, `${tag}: ${name} has no visible ink frame`)
     assert.equal(paint.fill, surface, `${tag}: ${name} should match the drawer paper surface`)
@@ -887,7 +919,7 @@ function checkPaperPaint(state, isPaper, tag) {
   assert.equal(footer.fill, tokens['primary-fill'], `${tag}: primary action lost its accent fill`)
   assert.equal(footer.ink, tokens['primary-ink'], `${tag}: primary action lost its accent ink`)
   const focus = fields.description.outline
-  assert(focus.style === 'solid' && focus.width >= 2 && focus.width > fields.title.outline.width, `${tag}: focused Description has no stronger outline`)
+  assert(focus.style === 'solid' && focus.width >= 2 && focus.width > fields.label.outline.width, `${tag}: focused Description has no stronger outline`)
   assert.equal(focus.color, tokens.focus, `${tag}: focus outline should use the shared focus token`)
   const ratio = contrast(focus.color, surface)
   assert(ratio >= 3 && ratio > contrast(tokens['control-line'], surface), `${tag}: focus outline contrast is not stronger than the rest stroke (${ratio.toFixed(2)}:1)`)
@@ -942,15 +974,12 @@ async function exercisePaper(page, fixture) {
     const drawer = page.getByRole('dialog', exact(dialogName)).and(page.locator(paperDrawer))
     await drawer.waitFor()
     const title = drawer.locator('[name=title]'), brief = drawer.locator('textarea[name=brief]')
-    const choose = images(drawer).getByRole('button', exact('Add images'))
+    const choose = images(drawer).getByRole('button', exact('Add files'))
     await choose.waitFor()
     const draft = { title: `Paper ${mode} draft`, brief: 'Select this text in the unsaved Markdown draft.' }
     await title.fill(draft.title)
     if (mode === 'detail') {
-      await title.focus()
-      await page.keyboard.press('Tab')
-      await expectFocus(page, drawer.getByRole('button', exact('Edit description')), 'Description can be edited with the keyboard')
-      await page.keyboard.press('Enter')
+      await drawer.getByRole('button', exact('Edit description')).click()
       await expectFocus(page, brief, 'Opening the editor should focus the textbox')
     }
     await brief.fill(draft.brief)
@@ -979,7 +1008,7 @@ async function exercisePaper(page, fixture) {
       }, controlSelector)
       assert.deepEqual(continuity, { sameDrawer: true, sameControls: true, focused: true, selection, ...draft },
         `${tag}: appearance switch replaced nodes or lost the draft/focus/selection`)
-      const paint = await inspectPaperDrawer(drawer)
+      const paint = await inspectPaperDrawer(drawer, mode)
       const evidence = { mode, appearance, taskAppearance, scheme, enabled, ...paint, continuity }
       report.paper.layouts.push(evidence)
       evidence.focusContrast = checkPaperPaint(paint, enabled, tag)
@@ -1026,24 +1055,24 @@ async function exercisePaper(page, fixture) {
 
 async function inspectAttachmentHeader(drawer, { empty, pending }) {
   const section = images(drawer)
-  const heading = section.getByRole('heading', exact('Task images'))
-  const add = section.getByRole('button', exact('Add images'))
+  const heading = section.getByRole('heading', exact('Task files'))
+  const add = section.getByRole('button', exact('Add files'))
   await add.waitFor()
-  assert.equal(await imagePicker(drawer).count(), 1, 'Task images should have exactly one image picker action')
+  assert.equal(await imagePicker(drawer).count(), 1, 'Task files should have exactly one file picker action')
   assert.equal(await section.locator('input[type=file][hidden][multiple]').count(), 1, 'Header action should keep the native file input')
   assert.equal(await heading.and(section.locator('.dsh-tasks-image-head h3')).count(), 1)
   assert.equal(await add.and(section.locator('.dsh-tasks-image-head .dsh-tasks-image-add-button')).count(), 1,
-    'Add images should be in the attachment header')
-  assert.equal((await add.innerText()).trim(), 'Add images')
+    'Add files should be in the attachment header')
+  assert.equal((await add.innerText()).trim(), 'Add files')
   assert.equal(await section.locator('.dsh-tasks-image-add[data-empty]').count(), empty ? 1 : 0,
-    'The drop/paste hint should only render while the gallery is empty')
-  assert.equal(await section.getByText(/Paste or drop images here/).count(), empty ? 1 : 0)
+    'The empty drop-zone frame should only apply while the gallery is empty')
+  assert.equal(await section.getByText(/Drop or paste files here/).count(), 1)
   assert.equal(await section.getByText('Refreshing discards pending files.', exact('Refreshing discards pending files.')).count(), pending ? 1 : 0,
-    'The pending help should only appear while images are queued')
+    'The pending help should only appear while files are queued')
   return add
 }
 
-async function checkFlatImageAction(page, action, tag) {
+async function checkFlatImageAction(page, action, tag, { tinted = false } = {}) {
   await action.scrollIntoViewIfNeeded()
   await page.mouse.move(0, 0)
   await action.evaluate(button => button.blur())
@@ -1071,10 +1100,11 @@ async function checkFlatImageAction(page, action, tag) {
   await settlePaint(page)
   const focus = await paint()
   for (const [state, style] of Object.entries({ rest, hover, focus })) {
-    assert(!style.hasBorder && !style.hasInk && style.shadow === 'none' && style.backgroundImage === 'none',
-      `${tag} ${state}: action should remain flat, without a visible border, shadow, or Ink frame`)
+    assert(!style.hasInk && style.shadow === 'none' && style.backgroundImage === 'none',
+      `${tag} ${state}: action should remain free of shadow or Ink frame`)
+    if (!tinted) assert(!style.hasBorder, `${tag} ${state}: icon action should remain borderless`)
   }
-  assert.equal(rest.fill, 'rgba(0, 0, 0, 0)', `${tag}: resting action should have no fill`)
+  if (!tinted) assert.equal(rest.fill, 'rgba(0, 0, 0, 0)', `${tag}: resting icon action should have no fill`)
   assert(hover.fill !== rest.fill || hover.ink !== rest.ink, `${tag}: hover should give feedback through fill or text color`)
   assert(focus.focused && focus.outline === 'solid' && focus.outlineWidth >= 2,
     `${tag}: keyboard focus should display a visible outline (${JSON.stringify(focus)})`)
@@ -1090,13 +1120,13 @@ async function exercisePaperAttachments(page, fixture) {
   const detail = page.getByRole('dialog', exact('Task details'))
   const openCreate = page.getByRole('button', exact('New task'))
   const openDetail = page.locator(`article[data-task-id="${fixture.seedId}"] .dsh-tasks-card-title`)
-  const remove = async row => {
-    const target = row.getByRole('button', exact('Remove image'))
+  const remove = async (row, name) => {
+    const target = row.getByRole('button', exact('Remove file: ' + name))
     await target.waitFor()
     assert.equal(await target.and(row.locator('.dsh-tasks-image-remove')).count(), 1)
-    assert.equal((await target.innerText()).trim(), '', 'Remove image should have an icon, not visible text')
-    assert.equal(await target.getAttribute('title'), 'Remove image')
-    assert(await target.locator('[aria-hidden="true"] svg, svg[aria-hidden="true"]').isVisible(), 'Remove image should display a decorative icon')
+    assert.equal((await target.innerText()).trim(), '', 'Remove file should have an icon, not visible text')
+    assert.equal(await target.getAttribute('title'), 'Remove file')
+    assert(await target.locator('[aria-hidden="true"] svg, svg[aria-hidden="true"]').isVisible(), 'Remove file should display a decorative icon')
     return target
   }
   for (const [scheme, width, height] of [['light', 375, 740], ['dark', 375, 740], ['light', 1366, 900]]) {
@@ -1106,15 +1136,15 @@ async function exercisePaperAttachments(page, fixture) {
     await openCreate.click()
     const add = await inspectAttachmentHeader(create, { empty: true, pending: false })
     const tag = `${scheme} ${width}px`
-    const addPaint = await checkFlatImageAction(page, add, `${tag} Add images`)
+    const addPaint = await checkFlatImageAction(page, add, `${tag} Add files`, { tinted: true })
     const name = `paper-${scheme}-fixture.png`
     await chooseFixtureImage(page, add, fixture, name)
     const pendingRow = imageList(create).getByRole('listitem').filter({ hasText: name })
-    await pendingRow.getByText('Upload after task creation', exact('Upload after task creation')).waitFor()
-    await images(create).getByText('1/10 · Pending: 1', exact('1/10 · Pending: 1')).waitFor()
+    await pendingRow.getByText(/Upload after task creation/).waitFor()
+    await images(create).getByText('1/10', { exact: true }).waitFor()
     await inspectAttachmentHeader(create, { empty: false, pending: true })
-    const removePending = await remove(pendingRow)
-    const pendingPaint = await checkFlatImageAction(page, removePending, `${tag} pending Remove image`)
+    const removePending = await remove(pendingRow, name)
+    const pendingPaint = await checkFlatImageAction(page, removePending, `${tag} pending Remove file`)
     await pendingRow.scrollIntoViewIfNeeded()
     await screenshot(page, `paper-create-pending-${scheme}-${width}`)
     await removePending.focus()
@@ -1127,15 +1157,15 @@ async function exercisePaperAttachments(page, fixture) {
     await openDetail.click()
     const addSaved = await inspectAttachmentHeader(detail, { empty: true, pending: false })
     await chooseFixtureImage(page, addSaved, fixture, name)
-    const savedRow = imageList(detail).getByRole('listitem').filter({ has: page.getByRole('button', exact('Image 1')) })
-    await savedRow.getByText('Uploaded', exact('Uploaded')).waitFor()
-    await images(detail).getByText('1/10', exact('1/10')).waitFor()
+    const savedRow = imageList(detail).getByRole('listitem').filter({ has: page.getByRole('button', exact(name)) })
+    await savedRow.getByText(/Uploaded/).waitFor()
+    await images(detail).getByText('1/10', { exact: true }).waitFor()
     await inspectAttachmentHeader(detail, { empty: false, pending: false })
     const savedImage = savedRow.locator('img')
     await savedImage.scrollIntoViewIfNeeded()
     await savedImage.evaluate(image => image.decode())
-    const removeSaved = await remove(savedRow)
-    const savedPaint = await checkFlatImageAction(page, removeSaved, `${tag} saved Remove image`)
+    const removeSaved = await remove(savedRow, name)
+    const savedPaint = await checkFlatImageAction(page, removeSaved, `${tag} saved Remove file`)
     await savedRow.scrollIntoViewIfNeeded()
     await screenshot(page, `paper-detail-uploaded-${scheme}-${width}`)
     await removeSaved.focus()
@@ -1145,11 +1175,11 @@ async function exercisePaperAttachments(page, fixture) {
     await inspectAttachmentHeader(detail, { empty: true, pending: false })
     await closeWithEscape(page, detail)
     const writes = report.writes.slice(start)
-    assert.deepEqual(writes.map(({ operation, id }) => [operation, id]), [['upload', fixture.seedId], ['remove-image', fixture.seedId]],
+    assert.deepEqual(writes.map(({ operation, id }) => [operation, id]), [['upload', fixture.seedId], ['remove-file', fixture.seedId]],
       'Paper attachment actions should upload once and remove once only on the selected synthetic task')
     report.paper.attachmentStates.push({ scheme, viewport: { width, height }, add: addPaint, removePending: pendingPaint, removeSaved: savedPaint })
   }
-  check('Paper images use one flat header action and flat, keyboard-operable icon-only removal; pending and uploaded rows retain their original write behavior')
+  check('Paper files use one header action and flat, keyboard-operable icon-only removal; pending and uploaded rows retain their original write behavior')
 }
 
 async function exerciseBoardScrollbar(page) {
@@ -1596,6 +1626,73 @@ async function exerciseChineseDate(page) {
   check('Chinese date presets, clear label, and nested Escape focus are accessible at 375px')
 }
 
+async function exerciseInteractions(page, fixture, { updateStarted, releaseUpdate, requests }) {
+  const strip = page.locator('.dsh-tasks-board-strip')
+  const card = id => strip.locator(`article[data-task-id="${id}"]`)
+  const source = card(fixture.seedId), other = card(fixture.snapshotId)
+  const detail = page.getByRole('dialog', exact('Task details'))
+  const grab = other.locator('.dsh-tasks-grip')
+  const gripNode = await grab.elementHandle()
+  const boardNode = await strip.elementHandle()
+  await source.locator('.dsh-tasks-card-title').click()
+  await detail.getByRole('button', exact('Edit description')).click()
+  const saved = `A description with [Open in TAPD](<${externalLink}>)`
+  await detail.locator('textarea[name=brief]').fill(saved)
+  try {
+    await detail.getByRole('button', exact('Save changes')).click()
+    await updateStarted
+    assert(await gripNode.evaluate(el => el.isConnected && el.matches('.dsh-tasks-grip')), 'Saving must not remove unrelated card grips')
+    assert(await boardNode.evaluate(el => el.isConnected), 'Saving must not remount the board')
+  } finally { releaseUpdate() }
+  const link = detail.getByRole('link', exact('Open in TAPD'))
+  await link.waitFor()
+  assert.equal(await link.getAttribute('href'), externalLink)
+  assert.equal(await link.getAttribute('rel'), 'noopener noreferrer')
+  const originalUrl = page.url()
+  await page.evaluate(() => {
+    const open = window.open
+    window.__taskOpenCalls = []
+    window.open = (...args) => { window.__taskOpenCalls.push(args); return open.apply(window, args) }
+  })
+  for (const open of [() => link.click(), () => link.press('Enter')]) {
+    const [popup] = await Promise.all([page.context().waitForEvent('page'), open()])
+    await popup.waitForURL(externalLink)
+    await popup.close()
+    assert.equal(page.url(), originalUrl)
+    assert(await detail.isVisible())
+  }
+  assert.deepEqual(await page.evaluate(() => window.__taskOpenCalls), Array.from({ length: 2 }, () => [externalLink, '_blank', 'noopener,noreferrer']))
+  assert.equal(requests.filter(operation => operation === 'list').length, 1, 'Saving should not request a fresh board')
+  await closeWithEscape(page, detail)
+  assert(await gripNode.evaluate(el => el.isConnected), 'Successful save must preserve unrelated card controls')
+  check('TAPD-style link delegates pointer and Enter to the opener; editing and saving keep the board and unrelated grips mounted')
+
+  const target = strip.locator('[data-column-id="stage:doing"]')
+  async function drag(cancel) {
+    const grip = source.locator('.dsh-tasks-grip')
+    await grip.scrollIntoViewIfNeeded()
+    const from = await grip.boundingBox(), to = await target.boundingBox()
+    assert(from && to)
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(from.x + from.width / 2 + 12, from.y + from.height / 2)
+    await page.locator('.dsh-tasks-drag-preview').waitFor()
+    await page.mouse.move(to.x + to.width / 2, to.y + Math.min(to.height / 2, 120), { steps: 16 })
+    await target.locator(':scope[data-drop="true"]').waitFor()
+    assert.equal(requests.filter(operation => operation === 'move').length, 0, 'No mutation before drop')
+    if (cancel) await page.keyboard.press('Escape')
+    await page.mouse.up()
+    await page.locator('.dsh-tasks-drag-preview').waitFor({ state: 'hidden' })
+  }
+  await drag(true)
+  assert.equal(requests.filter(operation => operation === 'move').length, 0)
+  await drag(false)
+  await target.locator(`[data-task-id="${fixture.seedId}"]`).waitFor()
+  assert.equal(requests.filter(operation => operation === 'move').length, 1)
+  assert(await gripNode.evaluate(el => el.isConnected))
+  check('Mouse drag marks the destination, Escape cancels, and drop moves only the selected card')
+}
+
 export { findTools, loadShell, readClientInputs, readAppearanceClient, mount, report }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -1616,9 +1713,21 @@ try {
   const context = await browser.newContext({ ...contextOptions, viewport: { width: 1366, height: 900 }, locale: 'en-US' })
   phase = 'mount fixture'
   const fixture = makeFixture()
+  const interactionsOnly = process.env.TASK_DRAWER_LAYOUT_INTERACTIONS === '1'
+  const requests = [], updateStarted = Promise.withResolvers(), updateGate = Promise.withResolvers()
+  if (interactionsOnly) {
+    const rpc = fixture.rpc
+    fixture.rpc = async request => {
+      requests.push(request.operation)
+      if (request.operation === 'update') { updateStarted.resolve(); await updateGate.promise }
+      return rpc(request)
+    }
+  }
   mounted = await mount(context, dist, shell, inputs, fixture)
   page = mounted.page
   phase = 'exercise Tasks UI'
+  if (interactionsOnly) await exerciseInteractions(page, fixture, { updateStarted: updateStarted.promise, releaseUpdate: updateGate.resolve, requests })
+  else {
   await exercise(page, fixture, mounted.reload)
   if (appearance?.paper) {
     phase = 'mount Paper fixture'
@@ -1654,6 +1763,7 @@ try {
   const writes = report.writes.length
   await exerciseChineseDate(page)
   assert.equal(report.writes.length, writes, 'Chinese calendar preview and clear must not write')
+  }
   phase = 'check browser and fixture errors'
   assert.deepEqual(report.pageErrors, [], 'Unexpected browser errors')
   assert.deepEqual(fixtureErrors(), [], 'Unexpected fixture errors')

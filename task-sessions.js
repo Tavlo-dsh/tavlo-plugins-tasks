@@ -1,6 +1,7 @@
 /** Published Session APIs: durable launch recovery and passive board status. */
 import { z } from 'zod'
 import { sessionId as sessionIdSchema } from './task-schema.js'
+import { matchesCreationProof } from './task-creation-proof.js'
 
 function refusal(code, message, details = {}) {
   return Object.assign(new Error(message), { code, details, taskSessionFailure: true })
@@ -19,7 +20,10 @@ export function createTaskSessions(ctx) {
     try { return await operation(controller()) }
     catch (error) {
       if (error?.taskSessionFailure) throw error
-      throw refusal('tasks/launch-failed', 'Session operation failed; resume the saved launch', { ...(error?.code ? { causeCode: error.code } : {}) })
+      throw refusal('tasks/launch-failed', 'Session operation failed; resume the saved launch', {
+        ...(error?.code ? { causeCode: error.code } : {}),
+        ...(error?.code === 'session/attachment-invalid' && typeof error.details?.reason === 'string' ? { attachmentReason: error.details.reason } : {}),
+      })
     }
   }
   async function state(id) {
@@ -27,6 +31,20 @@ export function createTaskSessions(ctx) {
     catch (error) { if (error?.code === 'session/not-found') return null; throw error }
   }
   return {
+    async verifyCreation(task, { sessionId, callSeq, resultSeq }, requestSignal) {
+      const readSignal = AbortSignal.any([signal, AbortSignal.timeout(10000), ...(requestSignal ? [requestSignal] : [])])
+      try {
+        const query = ctx.get('sessionQuery')
+        const read = seq => query.readEvent({ sessionId, seq, before: 0, after: 0 }, readSignal)
+        const [call, result] = await Promise.all([read(callSeq), read(resultSeq)])
+        return call?.target?.seq === callSeq && result?.target?.seq === resultSeq && matchesCreationProof(task, sessionId, call, result)
+      } catch { return false } // Unavailable, ambiguous or missing evidence must not bind a task.
+    },
+    canSendFiles() {
+      return typeof ctx.get('fileUploads')?.uploadStream === 'function'
+        && typeof ctx.get('attachments')?.readFileStream === 'function'
+        && typeof ctx.get('sessionController')?.prompt === 'function'
+    },
     async checkLaunch(task, input) {
       if (input.forkFromSessionId && typeof ctx.get('sessionController')?.fork !== 'function') {
         throw refusal('tasks/fork-unavailable', 'Native session fork is unavailable')
@@ -117,9 +135,52 @@ export function createTaskSessions(ctx) {
       }
       return parts
     },
-    async prompt({ sessionId, input }, images = []) {
+    async fileParts({ sessionId }, files) {
       if (archived(sessionId)) throw refusal('tasks/session-archived', 'Unarchive the saved conversation before resuming')
-      await remote(service => service.prompt({ sessionId, requestId: 'tasks.' + input.requestId, mode: 'queue', content: [{ type: 'text', text: input.content }, ...images] }, signal))
+      const attachments = ctx.get('attachments'), uploads = ctx.get('fileUploads')
+      if (typeof attachments?.readFileStream !== 'function' || typeof uploads?.uploadStream !== 'function') {
+        throw refusal('tasks/prompt-file-unavailable', 'Session file attachments are unavailable')
+      }
+      const parts = []
+      for (const { attachmentId, name, bytes } of files) {
+        try {
+          let size = 0
+          const data = (async function* () {
+            for await (const chunk of attachments.readFileStream({ attachmentId, name, bytes }, signal)) {
+              signal.throwIfAborted()
+              size += chunk.byteLength
+              if (size > bytes) throw new Error('Unexpected file size')
+              yield chunk
+            }
+            if (size !== bytes) throw new Error('Incomplete attachment')
+          })()
+          // Upload receipts are scoped to a live Session. Keep only the source
+          // references in SQLite and stage again if this launch is resumed.
+          const { receiptId, file } = await uploads.uploadStream({ sessionId, data, name, signal })
+          if (!receiptId || size !== bytes || file?.attachmentId !== attachmentId || file?.bytes !== bytes || file?.name !== name) {
+            throw new Error('Unexpected staged file')
+          }
+          parts.push({ type: 'file', receiptId })
+        } catch { throw refusal('tasks/prompt-file-unavailable', 'Could not stage a saved task file', { name }) }
+      }
+      return parts
+    },
+    async prompt({ sessionId, input, criteria }, attachments = []) {
+      if (archived(sessionId)) throw refusal('tasks/session-archived', 'Unarchive the saved conversation before resuming')
+      const text = criteria ? `${input.content}\n\n## Task board handoff\nTask ID: ${input.taskId}\nComplete the requested work against these saved acceptance criteria, then call the native tasks_submit_delivery tool with taskId, a unique requestId (reuse it only to retry the same submission), summary, and optional verification, remaining, and links (each with label and an HTTP(S) URL). Report only what you actually verified. If the tool is unavailable or the submission fails, tell the owner and present the evidence in your reply; do not claim it was submitted. Do not close or mark the task done; the owner reviews the delivery.\n\nAcceptance criteria:\n${criteria}` : input.content
+      await remote(service => service.prompt({ sessionId, requestId: 'tasks.' + input.requestId, mode: 'queue', content: [{ type: 'text', text }, ...attachments] }, signal))
+    },
+    async continueDelivery(taskId, { sessionId, id, feedback }) {
+      if (archived(sessionId)) throw refusal('tasks/session-archived', 'Unarchive the conversation before sending feedback')
+      const text = `The task board owner returned your delivery for task ${taskId}. Please address the feedback below, then submit a new delivery with tasks_submit_delivery and a new requestId. If the tool is unavailable or fails, present the evidence in your reply without claiming submission. Do not mark the task done; it remains subject to owner review.\n\nOwner feedback:\n${feedback}`
+      try {
+        await controller().prompt({ sessionId, requestId: 'tasks-delivery.' + id, mode: 'queue', content: [{ type: 'text', text }] }, signal)
+      } catch (error) {
+        if (error?.taskSessionFailure) throw error
+        throw refusal('tasks/delivery-continue-failed', 'Could not send the saved feedback; retry to continue in the same conversation', {
+          ...(error?.code ? { causeCode: error.code } : {}),
+        })
+      }
     },
     /** One Host observer, independent of browser count; pending-input changes also get sampled. */
     async watch(store, intervalMs) {

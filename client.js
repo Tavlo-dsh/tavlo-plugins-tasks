@@ -12,7 +12,7 @@ window.__ModuleLoader__.load({
     const { TaskDatePicker, TaskPaperInk = () => null } = require('./calendar/task-date-picker.jsx')
     const Dnd = require('@dnd-kit/core')
     const { createPortal } = require('react-dom')
-    const { useModalLayer, MarkdownText, Button, Input, Checkbox, Tag, ImageLightbox } = require('@deepseek-ai/dsh-client-ui-primitives')
+    const { useModalLayer, MarkdownDelegateProvider, MarkdownText, Button, Input, Checkbox, Tag, ImageLightbox } = require('@deepseek-ai/dsh-client-ui-primitives')
     const h = React.createElement
 
     const PANEL_ID = 'tasks'
@@ -22,26 +22,63 @@ window.__ModuleLoader__.load({
     const defaults = Object.keys(STAGES).map(stage => ({ id: 'stage:' + stage, stage }))
     const taskColumn = task => task.columnId || 'stage:' + task.stage
     const linksSession = (task, sessionId) => task.activeSessionId === sessionId || task.previousSessionIds?.includes(sessionId)
-    const taskWritePending = state => !!(state.form.pending || state.editor?.pending || state.launchForm?.pending
-      || state.deletion?.pending || Object.values(state.stages).some(row => row.pending))
+    const boardWritePending = state => !!(state.form.pending || state.quickCreating || state.launchForm?.pending
+      || state.deletion?.pending || state.deliveryMutation?.pending || Object.values(state.stages).some(row => row.pending))
+    const taskWritePending = state => !!state.editor?.pending || boardWritePending(state)
+    const checklistKeys = ['acceptanceCriteria', 'dependencyIds']
+    const DETAIL_VIEWS = ['detailTab', 'activity', 'deliveryTab']
+    const dependencyIds = task => task?.dependencyIds || []
+    const taskIndex = tasks => new Map(tasks.map(task => [task.id, task]))
+    const blockersOf = (task, byId) => dependencyIds(task).filter(id => byId.get(id)?.stage !== 'done')
+    const dependentsOf = (taskId, byId) => taskId && byId ? [...byId.values()]
+      .filter(row => row.id !== taskId && dependencyIds(row).includes(taskId))
+      .sort((a, b) => (a.stage === 'done') - (b.stage === 'done') || b.updatedAt.localeCompare(a.updatedAt)) : []
+    function newlyUnlockedTasks(wasDone, nextTasks, completedTask) {
+      if (wasDone || !completedTask || completedTask.stage !== 'done') return []
+      const nextById = taskIndex(nextTasks)
+      return nextTasks.filter(row => row.id !== completedTask.id && row.stage !== 'done' && !row.activeSessionId
+        && dependencyIds(row).includes(completedTask.id) && blockersOf(row, nextById).length === 0)
+    }
+    const deliveryOpen = task => ['pending', 'returned'].includes(task.delivery?.status)
+    const attentionKinds = ['approval', 'question', 'reviewPending', 'error', 'reviewReturned']
+    function attentionOf(task, statuses) {
+      if (task.stage === 'done') return
+      const runtime = runtimeOf(task, statuses)
+      if (runtime === 'approval' || runtime === 'question') return runtime
+      if (task.delivery?.status === 'pending') return 'reviewPending'
+      if (runtime === 'error') return runtime
+      if (task.delivery?.status === 'returned' && !task.delivery.continuedAt) return 'reviewReturned'
+    }
+    const isReadyToStart = (task, byId) => task.stage !== 'done' && !task.activeSessionId && !unfinishedLaunch(task)
+      && !blockersOf(task, byId).length
     const fallbackPriorities = ['P0', 'P1', 'P2'].map(key => ({ key, name: key }))
     const priorityLabel = (priorities, key) => priorities.get(key) ?? key
     const metaKeys = ['labelId', 'priority', 'dueDate']
     const preferenceKeys = ['workspaceId', 'model']
     function detailPatch(values, task) {
-      return Object.fromEntries([...metaKeys, ...preferenceKeys].filter(key => key === 'model'
-        ? modelKey(values.model) !== modelKey(task.model) || values.model?.reasoningEffort !== task.model?.reasoningEffort
-        : (values[key] || null) !== (task[key] || null)).map(key => [key, values[key] || null]))
+      return {
+        ...Object.fromEntries([...metaKeys, ...preferenceKeys].filter(key => key === 'model'
+          ? modelKey(values.model) !== modelKey(task.model) || values.model?.reasoningEffort !== task.model?.reasoningEffort
+          : (values[key] || null) !== (task[key] || null)).map(key => [key, values[key] || null])),
+        ...((values.acceptanceCriteria || '').trim() !== (task.acceptanceCriteria || '') ? { acceptanceCriteria: (values.acceptanceCriteria || '').trim() } : {}),
+        ...(JSON.stringify(dependencyIds(values)) !== JSON.stringify(dependencyIds(task)) ? { dependencyIds: dependencyIds(values) } : {}),
+      }
     }
     const metadata = task => Object.fromEntries(metaKeys.filter(key => task?.[key]).map(key => [key, task[key]]))
+    const deliveryFields = (values = {}) => ({ ...(values.acceptanceCriteria?.trim() ? { acceptanceCriteria: values.acceptanceCriteria.trim() } : {}),
+      ...(dependencyIds(values).length ? { dependencyIds: dependencyIds(values) } : {}) })
+    const validDependencies = value => value === undefined || Array.isArray(value) && value.length <= 20
+      && new Set(value).size === value.length && value.every(id => typeof id === 'string' && id.length <= 36 && isSessionId(id))
+    const validCriteria = value => value === undefined || typeof value === 'string' && value.length <= 4000
     function editableValues(task) {
-      return { title: task.title, brief: task.brief || '', ...metadata(task), workspaceId: task.workspaceId || undefined,
+      return { title: task.title, brief: task.brief || '', ...metadata(task), acceptanceCriteria: task.acceptanceCriteria || '', dependencyIds: dependencyIds(task), workspaceId: task.workspaceId || undefined,
         model: task.model ? { provider: task.model.provider, model: task.model.model,
           ...(task.model.reasoningEffort ? { reasoningEffort: task.model.reasoningEffort } : {}) } : undefined }
     }
     const sameEditable = (left, right) => JSON.stringify(editableValues(left)) === JSON.stringify(editableValues(right))
     const validEditable = value => value && typeof value.title === 'string' && typeof value.brief === 'string'
       && [...metaKeys, 'workspaceId'].every(key => value[key] === undefined || typeof value[key] === 'string')
+      && validCriteria(value.acceptanceCriteria) && validDependencies(value.dependencyIds)
       && (value.model === undefined || isModel(value.model))
     const todayLocal = () => new Date().toLocaleDateString('sv-SE')
     const dueIcons = { overdue: 'clock', today: 'sun', tomorrow: 'sunrise', nextWeek: 'calendar' }
@@ -67,16 +104,114 @@ window.__ModuleLoader__.load({
       }, [])
       return day
     }
+    function weekStartLocal(today) {
+      const date = new Date(today + 'T12:00:00')
+      const day = date.getDay()
+      date.setDate(date.getDate() - (day === 0 ? 6 : day - 1))
+      return date.toLocaleDateString('sv-SE')
+    }
+    function doneTimeBucket(task, today, weekStart) {
+      const ts = Date.parse(task.completedAt ?? task.updatedAt)
+      if (!Number.isFinite(ts)) return 'earlier'
+      const day = new Date(ts).toLocaleDateString('sv-SE')
+      if (day >= today) return 'today'
+      if (day >= weekStart) return 'thisWeek'
+      return 'earlier'
+    }
+    function formatElapsed(t, sinceIso, nowMs) {
+      const started = Date.parse(sinceIso)
+      if (!Number.isFinite(started)) return ''
+      const minutes = Math.floor(Math.max(0, nowMs - started) / 60000)
+      if (minutes < 1) return t('elapsedUnderMinute')
+      if (minutes < 60) return minutes + 'm'
+      const hours = Math.floor(minutes / 60)
+      const rem = minutes % 60
+      return hours + 'h' + (rem ? ' ' + rem + 'm' : '')
+    }
+    function useNowTick(active) {
+      const [now, setNow] = React.useState(() => Date.now())
+      React.useEffect(() => {
+        if (!active) return
+        setNow(Date.now())
+        const id = setInterval(() => setNow(Date.now()), 15000)
+        return () => clearInterval(id)
+      }, [active])
+      return now
+    }
+    const SORT_MODES = ['manual', 'priority', 'dueDate', 'updated']
+    const SORT_LABELS = { manual: 'sortManual', priority: 'sortPriority', dueDate: 'sortDueDate', updated: 'sortUpdated' }
+    function priorityRank(key, priorities) {
+      if (!key) return 999
+      if (key === 'P0') return 0
+      if (key === 'P1') return 1
+      if (key === 'P2') return 2
+      const keys = priorities ? [...priorities.keys()] : []
+      const idx = keys.indexOf(key)
+      return idx >= 0 ? idx : 100
+    }
+    function sortColumnTasks(rows, sortBy, priorities) {
+      if (!sortBy || sortBy === 'manual') return rows
+      const copy = [...rows]
+      if (sortBy === 'priority') {
+        return copy.sort((a, b) => (priorityRank(a.priority, priorities) - priorityRank(b.priority, priorities))
+          || ((a.dueDate || '9999-99-99').localeCompare(b.dueDate || '9999-99-99'))
+          || (a.orderKey < b.orderKey ? -1 : a.orderKey > b.orderKey ? 1 : 0))
+      }
+      if (sortBy === 'dueDate') {
+        return copy.sort((a, b) => ((a.dueDate || '9999-99-99').localeCompare(b.dueDate || '9999-99-99'))
+          || (priorityRank(a.priority, priorities) - priorityRank(b.priority, priorities))
+          || (a.orderKey < b.orderKey ? -1 : a.orderKey > b.orderKey ? 1 : 0))
+      }
+      if (sortBy === 'updated') {
+        return copy.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+      }
+      return copy
+    }
     const newRequestId = () => Array.from(window.crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
     const columnLabel = (t, column) => column.name || t(STAGES[column.stage])
     const DRAFT_KEY = 'dsh-plugin-tasks:create-v1'
     const LAUNCH_KEY = 'dsh-plugin-tasks:launch-v1'
     const DETAIL_KEY = 'dsh-plugin-tasks:details-v1:'
+    const BOARD_VIEW_KEY = 'dsh-plugin-tasks:board-view-v1'
+    const DONE_PREVIEW = 4
     const RUNTIME = ['running', 'approval', 'question', 'error', 'idle', 'missing', 'archived', 'unknown']
 
     const EN = {
+      needsMyAction: 'Needs my attention', reviewPending: 'Awaiting review', reviewReturned: 'Changes requested', reviewAccepted: 'Accepted',
+      viewProgress: 'View progress', reviewDelivery: 'Review delivery', inspectDependencies: 'View prerequisites',
+      unlinkedConversation: 'No linked conversation', createConversation: 'New conversation',
+      createConversationNote: 'This task is already in progress but has no linked conversation. Confirm to create one and send the first message.',
+      deliveryTab: 'Agent delivery',
+      acceptanceCriteria: 'Acceptance criteria', criteriaPlaceholder: 'What must be true before this task can be accepted?',
+      addCriteria: 'Add acceptance criteria', editCriteria: 'Edit criteria', addPrerequisites: 'Add prerequisites',
+      dependentTasks: 'Dependent tasks', blockingCount: 'Blocks {count}', unlockedNotice: 'Unlocked {count} dependent task(s)',
+      quickAddPlaceholder: 'Task title… (Enter to add)', quickAddSubmit: 'Add', quickAddAdding: 'Adding…', expandCreateForm: 'Full form',
+      attentionPillFilter: 'Filter by reason', attentionPillShowAll: 'Show all reasons', attentionShowAll: 'Show all ({count})',
+      sectionProperties: 'Properties & execution', createColumn: 'Target column', changeColumn: 'Change column',
+      discardEdits: 'Discard changes', unsavedBadge: 'Unsaved', commentShortcut: 'Ctrl/⌘ + Enter',
+      showMore: 'Expand', showLess: 'Collapse', viewDelivery: 'View delivery', sessionChip: 'Session',
+      deliveryCriteriaRef: 'Task acceptance criteria', deliverySubmittedAt: 'Submitted', deliveryReviewedAt: 'Reviewed',
+      deliveryLinksHeading: 'Evidence links',
+      criteriaLaunchHint: 'The Agent will receive these criteria and be asked to submit its evidence to this task.',
+      dependencyIds: 'Prerequisites', addDependency: 'Add a prerequisite', removeDependency: 'Remove prerequisite',
+      dependencyMissing: 'Deleted or unavailable task', dependencyReady: 'Ready to start', dependencyBlocked: 'Waiting for prerequisites',
+      dependencyCycle: 'These prerequisites would create a cycle.', dependencyUnavailable: 'A prerequisite is no longer available.',
+      deliveryHeading: 'Agent delivery', deliveryRuntime: 'Current run', deliveryEvidence: 'Evidence submitted by the Agent',
+      deliveryVerification: 'Verification', deliveryUnverified: 'Not verified or still open', deliveryCriteriaSnapshot: 'Criteria sent for this run',
+      deliveryNotSubmitted: 'No delivery submitted. An idle conversation is not a completed task.',
+      deliveryWait: 'Ask the Agent in the original conversation to submit its delivery evidence.',
+      deliveryFeedback: 'Review feedback', deliveryFeedbackHint: 'Explain what the Agent should change before resubmitting.',
+      acceptDelivery: 'Accept and complete', returnDelivery: 'Return for changes', sendReviewFeedback: 'Send feedback to Agent',
+      feedbackSent: 'Feedback sent to the original conversation.', deliveryMutationFailed: 'The change was not confirmed. Check the current delivery before trying again.',
+      deliveryActionRequired: 'Review the submitted work or resolve the requested changes first.',
+      eventDeliverySubmitted: 'Submitted delivery', eventDeliveryAccepted: 'Accepted delivery', eventDeliveryReturned: 'Returned delivery',
+      eventDeliveryContinued: 'Sent review feedback',
       insights: 'Notebook overview', delivery: 'Completion rate', openTasks: 'Open', metrics: 'Key metrics', needsAction: 'Needs attention', closedToday: 'Completed today', cycle: 'Average turnaround', dayUnit: 'd', mix: 'Priority breakdown', bindingsMix: 'Workspaces & models', weekly: 'Completions · last 7 days',
-      dueOverview: 'Due dates', dueScope: 'Open tasks · overdue and next 7 days', tomorrow: 'Due tomorrow', nextWeek: 'In 2–7 days', noOpenTasks: 'No open tasks in this view.', noDueDates: 'None of these open tasks has a due date.', noNearDates: 'Nothing overdue or due in the next 7 days.', removeDue: 'Clear due date filter',
+      dueOverview: 'Due dates', dueScope: 'Open tasks · overdue and next 7 days', tomorrow: 'Due tomorrow', nextWeek: 'In 2–7 days', noOpenTasks: 'No open tasks in this view.', noDueDates: 'None of these open tasks has a due date.', noNearDates: 'Nothing overdue or due in the next 7 days.', removeDue: 'Clear due date filter', removeFilter: 'Remove filter',
+      doneGroupToday: 'Today', doneGroupWeek: 'This week', doneGroupEarlier: 'Earlier', elapsedUnderMinute: '<1m',
+      sortBy: 'Sort', sortManual: 'Manual order', sortPriority: 'Priority (P0 first)', sortDueDate: 'Due date (earliest)', sortUpdated: 'Recently updated', removeSort: 'Reset sort',
+      shortcuts: 'Keyboard shortcuts', shortcutsIntro: 'Available when no dialog or text field is active.', shortcutSearch: 'Focus search', shortcutNew: 'New task', shortcutRefresh: 'Refresh board', shortcutInsights: 'Toggle overview', shortcutHelp: 'Show shortcuts',
+      batchSelect: 'Batch actions', batchExit: 'Done', batchSelected: '{count} selected', batchSelectAll: 'Select visible', batchClear: 'Clear', batchMarkDone: 'Mark complete', batchMoveTo: 'Move to…', batchDelete: 'Delete', batchConfirmDelete: 'Delete {count} tasks?', batchDeleteMore: 'and {count} more…', batchSelectCard: 'Select task',
       boardSettings: 'Board settings', workspaceFilter: 'Filter by workspace', loadingWorkspaces: 'Loading workspaces…',
       dragColumn: 'Reorder column', dragColumnHint: 'Drag between columns, click to manage, or use the arrow keys.',
       columnDragPrompt: 'Drag between columns to reorder', columnDropBefore: 'Release to place before {column}', columnDropAfter: 'Release to place after {column}',
@@ -96,10 +231,14 @@ window.__ModuleLoader__.load({
       preset_standard: 'Standard mode', preset_ptc: 'PTC mode', preset_minimal: 'Minimal mode', preset_cordis: 'Creator mode',
       boardColumns: 'Board columns', boardLabels: 'Board labels', columnsIntro: 'Arrange columns in the order tasks move through your board.', labelsIntro: 'Use color labels to group tasks across the board.', noLabels: 'No labels yet', noLabelsHint: 'Add your first label to use it on task cards.', resetFilters: 'Clear filters', filterCount: 'Active filters', taskCount: 'tasks', reorder: 'Reorder', moveGroup: 'Move to column',
       images: 'Task images', chooseImages: 'Add images', imageHint: 'Paste or drop images here.', imageLocalHint: 'Refreshing discards pending files.', imageUnavailable: 'Image storage is unavailable. You can still edit and save text.', imageInvalid: 'This file is empty, too large or not a supported image.', imageLimit: 'Image limit reached. Remove an image first.', imageFailed: 'Image change not confirmed.', imageQueued: 'Waiting to upload', imageSending: 'Uploading…', removeImage: 'Remove image', imageAdded: 'Attached image', imageRemoved: 'Removed image', launchImages: 'Send task images with the first message',
-      launchUploadPending: 'Not all images are uploaded. Wait, retry failed uploads in task details, or uncheck the box to send text only.',
+      launchFiles: 'Send task attachments with the first message',
+      launchUploadPending: 'Some attachments are not ready. Wait for uploads, return to task details to retry, or uncheck the box to send text only.',
+      promptFileUnavailable: 'A saved task file could not be attached to the conversation. Restore file access and retry this launch.',
+      promptFileRejected: 'The conversation rejected a task file. Retry the launch, or end it and start again without the attachment.',
+      noLaunchFiles: 'No attachments are saved for this launch.',
       promptImageUnavailable: 'Could not read the saved images. Restore attachment access and retry.', promptImageRejected: 'The model or session cannot accept these images. End this launch and choose a vision model, fewer images, or text only.',
       labelId: 'Label', labels: 'Manage labels', labelName: 'Label name', color: 'Color', addLabel: 'Add label', removeLabel: 'Remove label', labelProtected: 'Unassign this label from every task before deleting it.', priority: 'Priority', dueDate: 'Due date', today: 'Due today', overdue: 'Overdue', any: 'Any', none: 'None', preview: 'Markdown preview', copyCode: 'Copy code', copiedCode: 'Copied', footnotes: 'Footnotes', completedAt: 'Completed at', unknownTime: 'Unknown', activity: 'Activity', comment: 'Comment', post: 'Post comment', commentFailed: 'Comment not confirmed. Retry with the same text.', historyFailed: 'Could not load activity.', searchFailed: 'Comment search unavailable.', older: 'Older activity', eventCreated: 'Created', eventUpdated: 'Edited', eventMoved: 'Moved', eventCompleted: 'Completed', eventReopened: 'Reopened', eventBound: 'Linked conversation', sourceRpc: 'Host RPC', sourceService: 'Service', sourceAgent: 'MCP agent',
-      columns: 'Manage columns', addColumn: 'Add column', rename: 'Rename', removeColumn: 'Delete empty column', columnName: 'Column name', drag: 'Drag task', boardConflict: 'The board changed. Review the latest columns and try again.', boardFailed: 'Change not confirmed. Refresh before retrying.', columnProtected: 'Only empty custom columns can be deleted.', earlier: 'Move earlier', later: 'Move later',
+      columns: 'Manage columns', addColumn: 'Add column', rename: 'Rename', removeColumn: 'Delete empty column', columnName: 'Column name', columnColor: 'Column color', columnColorDefault: 'Stage default', columnColorCustom: 'Custom', applyColor: 'Apply', drag: 'Drag task', boardConflict: 'The board changed. Review the latest columns and try again.', boardFailed: 'Change not confirmed. Refresh before retrying.', columnProtected: 'Only empty custom columns can be deleted.', earlier: 'Move earlier', later: 'Move later',
       saveDetails: 'Save changes', discardDetails: 'Your edits will be lost. The saved task will not change.',
       unsavedDetails: 'Discard unsaved changes?', discardClose: 'Discard and close',
       savingDetails: 'Saving…', existingSessionNote: 'This task already has a conversation. Open it to continue.',
@@ -120,9 +259,9 @@ window.__ModuleLoader__.load({
       launchWorkspaceSync: 'Starting synchronizes the task’s workspace with this selection.',
       imageDraft: 'Upload after task creation', imagePreviewFailed: 'Image preview could not be loaded.', noImages: 'No images',
       imageNumber: 'Image {number}', imageUploaded: 'Uploaded', imagePendingCount: 'Pending: {count}',
-      launchImageSnapshot: 'Images saved for this launch; later task attachment changes do not affect them.',
-      launchPreviewPending: 'Waiting to confirm the saved launch images. Refresh task data to check again.',
-      launchWithoutImages: 'Images will not be sent with this message.',
+      launchFileSnapshot: 'Attachments saved for this launch; later task changes do not affect them.',
+      launchPreviewPending: 'Waiting to confirm the saved attachments. Refresh task data to check again.',
+      launchWithoutFiles: 'Attachments will not be sent with this message.',
       detailTab: 'Details', detailViews: 'Task views', copyTaskId: 'Copy task ID', taskIdCopied: 'Task ID copied',
       historyLoading: 'Loading activity…', historyEmpty: 'No activity recorded yet.', historyMoreFailed: 'Could not load older activity.',
       historyRefreshFailed: 'Could not refresh activity.', unknownColumn: 'Unavailable column', commentPlaceholder: 'Add a comment…',
@@ -171,7 +310,7 @@ window.__ModuleLoader__.load({
       retry: 'Retry',
       refresh: 'Refresh',
       taskTitle: 'Title',
-      taskBrief: 'Description (optional)',
+      taskBrief: 'Description',
       cancel: 'Close',
       create: 'Create task',
       creating: 'Saving…',
@@ -213,7 +352,7 @@ window.__ModuleLoader__.load({
       modelHint: 'Saved as a preference for starting the task later.',
       createIntro: 'Turn what needs doing into a task card.',
       titlePlaceholder: 'What needs to be done?',
-      briefPlaceholder: 'Describe the goal, context, or acceptance criteria…',
+      briefPlaceholder: 'Add background, context, or implementation notes…',
       descriptionMode: 'Description mode', descriptionEdit: 'Edit', descriptionPreview: 'Preview',
       editDescription: 'Edit description', noDescription: 'No description yet',
       draftHint: 'Closing keeps this draft in the current tab.',
@@ -236,8 +375,41 @@ window.__ModuleLoader__.load({
     }
 
     const ZH = {
+      needsMyAction: '需要我处理', reviewPending: '待验收', reviewReturned: '待返工', reviewAccepted: '已验收',
+      viewProgress: '查看进度', reviewDelivery: '验收成果', inspectDependencies: '查看前置任务',
+      unlinkedConversation: '未关联对话', createConversation: '新建对话',
+      createConversationNote: '此任务已在进行中，但尚未关联对话。确认后才会新建对话并发送首条消息。',
+      deliveryTab: 'Agent 交付',
+      acceptanceCriteria: '验收标准', criteriaPlaceholder: '写下完成这张卡必须满足的条件。',
+      addCriteria: '添加验收标准', editCriteria: '编辑标准', addPrerequisites: '添加前置任务',
+      dependentTasks: '下游任务', blockingCount: '待解锁 {count}', unlockedNotice: '已解锁 {count} 项下游任务',
+      quickAddPlaceholder: '输入任务标题，回车直接创建…', quickAddSubmit: '添加', quickAddAdding: '创建中…', expandCreateForm: '完整表单',
+      attentionPillFilter: '仅看此类待处理', attentionPillShowAll: '显示全部待处理', attentionShowAll: '查看全部 ({count})',
+      sectionProperties: '属性与执行', createColumn: '所属列', changeColumn: '切换列',
+      discardEdits: '取消修改', unsavedBadge: '未保存', commentShortcut: 'Ctrl/⌘ + Enter',
+      showMore: '展开', showLess: '收起', viewDelivery: '查看交付详情', sessionChip: '会话',
+      deliveryCriteriaRef: '对照任务验收标准', deliverySubmittedAt: '提交于', deliveryReviewedAt: '验收于',
+      deliveryLinksHeading: '参考链接',
+      criteriaLaunchHint: '这些标准会发给 Agent，并请它把交付证据提交回任务卡。',
+      dependencyIds: '前置任务', addDependency: '添加前置任务', removeDependency: '移除前置任务',
+      dependencyMissing: '任务已删除或不可用', dependencyReady: '可开始', dependencyBlocked: '等待前置任务',
+      dependencyCycle: '这些前置任务会形成循环依赖。', dependencyUnavailable: '一项前置任务已不可用。',
+      deliveryHeading: 'Agent 交付', deliveryRuntime: '本次执行', deliveryEvidence: 'Agent 提交的交付证据',
+      deliveryVerification: '验证结果', deliveryUnverified: '未验证或仍待解决', deliveryCriteriaSnapshot: '本次发给 Agent 的验收标准',
+      deliveryNotSubmitted: '尚未提交交付成果。会话空闲不等于任务完成。',
+      deliveryWait: '可在原会话请 Agent 把交付证据提交到这张卡。',
+      deliveryFeedback: '验收意见', deliveryFeedbackHint: '写明需要修改什么，再请 Agent 重新提交。',
+      acceptDelivery: '接受并完成', returnDelivery: '退回修改', sendReviewFeedback: '把意见发给 Agent',
+      feedbackSent: '验收意见已发到原会话。', deliveryMutationFailed: '未能确认操作。请查看最新交付状态后再试。',
+      deliveryActionRequired: '请先验收交付成果，或处理已退回的修改。',
+      eventDeliverySubmitted: '提交了交付成果', eventDeliveryAccepted: '接受了交付成果', eventDeliveryReturned: '退回了交付成果',
+      eventDeliveryContinued: '发送了验收意见',
       insights: '手记概览', delivery: '整体交付完成率', openTasks: '未完成', metrics: '核心度量指标', needsAction: '阻断 / 待推进', closedToday: '今日已闭环', cycle: '平均周转周期', dayUnit: '天', mix: '优先级分布', bindingsMix: '工作区与模型分布', weekly: '处理速率 · 近 7 天完成数',
-      dueOverview: '到期分布', dueScope: '未完成任务 · 逾期与未来 7 天', tomorrow: '明天到期', nextWeek: '后 2–7 天', noOpenTasks: '当前范围内没有未完成任务。', noDueDates: '当前未完成任务均未设截止日期。', noNearDates: '没有逾期或未来 7 天内到期的任务。', removeDue: '取消截止日期筛选',
+      dueOverview: '到期分布', dueScope: '未完成任务 · 逾期与未来 7 天', tomorrow: '明天到期', nextWeek: '后 2–7 天', noOpenTasks: '当前范围内没有未完成任务。', noDueDates: '当前未完成任务均未设截止日期。', noNearDates: '没有逾期或未来 7 天内到期的任务。', removeDue: '取消截止日期筛选', removeFilter: '移除筛选',
+      doneGroupToday: '今天', doneGroupWeek: '本周', doneGroupEarlier: '更早', elapsedUnderMinute: '<1m',
+      sortBy: '排序', sortManual: '默认手动排序', sortPriority: '按优先级（P0 优先）', sortDueDate: '按截止日期（最近优先）', sortUpdated: '按最近更新', removeSort: '恢复默认排序',
+      shortcuts: '快捷键', shortcutsIntro: '在未打开弹窗且未聚焦输入框时可用。', shortcutSearch: '聚焦搜索框', shortcutNew: '新建任务', shortcutRefresh: '刷新看板', shortcutInsights: '切换概览面板', shortcutHelp: '打开快捷键说明',
+      batchSelect: '批量操作', batchExit: '退出批量', batchSelected: '已选 {count} 项', batchSelectAll: '全选可见', batchClear: '清空', batchMarkDone: '标记完成', batchMoveTo: '移到列…', batchDelete: '删除', batchConfirmDelete: '确认删除已选的 {count} 项任务？', batchDeleteMore: '以及其余 {count} 项…', batchSelectCard: '选中任务',
       boardSettings: '看板设置', workspaceFilter: '按工作区筛选', loadingWorkspaces: '正在加载工作区…',
       dragColumn: '调整列顺序', dragColumnHint: '拖到两列之间调整顺序；单击打开管理，也可用左右键移动。',
       columnDragPrompt: '拖到两列之间调整顺序', columnDropBefore: '松手放在「{column}」前', columnDropAfter: '松手放在「{column}」后',
@@ -257,10 +429,14 @@ window.__ModuleLoader__.load({
       preset_standard: '标准模式', preset_ptc: 'PTC 模式', preset_minimal: '极简模式', preset_cordis: '创造模式',
       boardColumns: '看板列', boardLabels: '已有标签', columnsIntro: '按工作流程排列各列，拖动把手或使用箭头调整顺序。', labelsIntro: '用颜色标记同一类任务，标签在整个看板中共用。', noLabels: '还没有标签', noLabelsHint: '添加第一个标签后，就能在任务卡上使用。', resetFilters: '清除筛选', filterCount: '已启用筛选', taskCount: '张任务', reorder: '列内排序', moveGroup: '移到列',
       images: '任务图片', chooseImages: '添加图片', imageHint: '可粘贴或拖入图片。', imageLocalHint: '刷新页面会丢失待上传文件。', imageUnavailable: '宿主图片服务不可用，仍可编辑和保存文字。', imageInvalid: '文件为空、超过大小限制，或不是支持的图片格式。', imageLimit: '图片数量已达上限，请先移除图片。', imageFailed: '未确认图片操作成功。', imageQueued: '等待上传', imageSending: '上传中…', removeImage: '移除图片', imageAdded: '添加图片', imageRemoved: '移除图片', launchImages: '随首条消息发送任务图片',
-      launchUploadPending: '还有图片未上传成功。请等待上传、回到详情重试，或取消勾选以仅发送文字。',
+      launchFiles: '随首条消息发送任务附件',
+      launchUploadPending: '还有附件未上传成功。请等待上传、回到详情重试，或取消勾选以仅发送文字。',
+      promptFileUnavailable: '无法把已保存的文件附加到会话，请恢复文件访问后重试本次启动。',
+      promptFileRejected: '会话未接收某个任务文件。请重试本次启动，或结束后调整附件再重新启动。',
+      noLaunchFiles: '本次启动没有已保存的附件。',
       promptImageUnavailable: '无法读取已保存的图片，请恢复附件访问后重试。', promptImageRejected: '当前模型或会话无法接收这些图片。请结束本次启动，再选择支持图片的模型、减少图片或仅发送文字。',
       labelId: '标签', labels: '管理标签', labelName: '标签名', color: '颜色', addLabel: '添加标签', removeLabel: '删除标签', labelProtected: '请先解除所有任务对该标签的引用。', priority: '优先级', dueDate: '截止日期', today: '今天到期', overdue: '已逾期', any: '全部', none: '无', preview: 'Markdown 预览', copyCode: '复制代码', copiedCode: '已复制', footnotes: '脚注', completedAt: '完成时间', unknownTime: '未知', activity: '动态', comment: '评论', post: '发布评论', commentFailed: '评论未确认，可用原内容重试。', historyFailed: '动态读取失败。', searchFailed: '暂时无法搜索评论。', older: '更早的动态', eventCreated: '创建任务', eventUpdated: '修改字段', eventMoved: '移列', eventCompleted: '完成任务', eventReopened: '重开任务', eventBound: '绑定会话', sourceRpc: '宿主 RPC', sourceService: '服务调用', sourceAgent: 'MCP Agent',
-      columns: '管理列', addColumn: '添加列', rename: '改名', removeColumn: '删除空列', columnName: '列名称', drag: '拖动任务', boardConflict: '看板已变化，请核对最新列和卡片后再操作。', boardFailed: '变更未确认，请刷新后再操作。', columnProtected: '只能删除没有任务的自定义列。', earlier: '向前移动', later: '向后移动',
+      columns: '管理列', addColumn: '添加列', rename: '改名', removeColumn: '删除空列', columnName: '列名称', columnColor: '列颜色', columnColorDefault: '跟随阶段默认', columnColorCustom: '自定义', applyColor: '应用', drag: '拖动任务', boardConflict: '看板已变化，请核对最新列和卡片后再操作。', boardFailed: '变更未确认，请刷新后再操作。', columnProtected: '只能删除没有任务的自定义列。', earlier: '向前移动', later: '向后移动',
       saveDetails: '保存修改', discardDetails: '本次编辑的内容将丢失，已保存的任务不会改变。',
       unsavedDetails: '放弃未保存的修改？', discardClose: '放弃并关闭',
       savingDetails: '正在保存…', existingSessionNote: '此任务已有对话，打开即可继续。',
@@ -281,9 +457,9 @@ window.__ModuleLoader__.load({
       launchWorkspaceSync: '启动后同步更新任务所属工作区。',
       imageDraft: '创建任务后上传', imagePreviewFailed: '无法加载图片预览。', noImages: '暂无图片',
       imageNumber: '图片 {number}', imageUploaded: '已上传', imagePendingCount: '{count} 张待上传',
-      launchImageSnapshot: '本次启动已保存的图片，不受后续任务附件修改影响。',
-      launchPreviewPending: '正在确认本次启动保存的图片，可刷新任务数据后重试。',
-      launchWithoutImages: '本条消息不会发送图片。',
+      launchFileSnapshot: '本次启动已保存的附件，不受后续任务修改影响。',
+      launchPreviewPending: '正在确认本次启动保存的附件，可刷新任务数据后重试。',
+      launchWithoutFiles: '本条消息不会发送附件。',
       detailTab: '详情', detailViews: '任务视图', copyTaskId: '复制任务 ID', taskIdCopied: '已复制任务 ID',
       historyLoading: '正在加载动态…', historyEmpty: '暂无动态记录。', historyMoreFailed: '未能加载更早的动态。',
       historyRefreshFailed: '未能刷新动态。', unknownColumn: '不可用的列', commentPlaceholder: '写条评论…',
@@ -296,7 +472,7 @@ window.__ModuleLoader__.load({
       deleteFailed: '删除失败，任务仍保留，请重试。', deleteUnknown: '删除结果尚未确认，请重试确认同一次删除。',
       deleteConflict: '任务已有更新，请关闭弹框并刷新，确认内容后再删除。',
       taskDeleted: '该任务已被删除。', deletePendingLaunch: '请先恢复或结束尚未完成的启动，再删除任务。',
-      launch: '启动任务', start: '开始', starting: '正在启动…', openSession: '打开对话',
+      launch: '开始任务', start: '开始', starting: '正在启动…', openSession: '打开对话',
       openLinkedTask: '打开关联任务', openNamedLinkedTask: '打开关联任务：{title}',
       openLinkedTaskFailed: '无法打开关联任务。请重新打开对话菜单后再试。',
       resumeLaunch: '恢复启动', newSession: '新开一个对话', firstMessage: '首条消息',
@@ -332,7 +508,7 @@ window.__ModuleLoader__.load({
       retry: '重试',
       refresh: '刷新',
       taskTitle: '标题',
-      taskBrief: '描述（可选）',
+      taskBrief: '描述',
       cancel: '收起',
       create: '创建任务',
       creating: '正在保存…',
@@ -374,7 +550,7 @@ window.__ModuleLoader__.load({
       modelHint: '作为以后启动任务时的偏好保存。',
       createIntro: '把要做的事，整理成一张任务卡片。',
       titlePlaceholder: '这次要做什么？',
-      briefPlaceholder: '补充目标、背景或验收标准…',
+      briefPlaceholder: '补充背景、上下文或实现思路…',
       descriptionMode: '描述模式', descriptionEdit: '编辑', descriptionPreview: '预览',
       editDescription: '编辑描述', noDescription: '暂无描述',
       draftHint: '关闭后，草稿会保留在当前标签页。',
@@ -471,6 +647,9 @@ window.__ModuleLoader__.load({
   background: var(--dsw-specific-sidebar-fill);
   overflow: hidden;
 }
+.dsh-tasks-col[data-column-color] {
+  border-top: 3px solid color-mix(in srgb, var(--dsh-tasks-col-color) 75%, transparent);
+}
 .dsh-tasks-colhead {
   flex: none;
   display: flex;
@@ -510,7 +689,8 @@ window.__ModuleLoader__.load({
   box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
 }
 .dsh-tasks-card:hover { border-color: var(--dsw-alias-border-l2); box-shadow: 0 2px 4px rgb(0 0 0 / 6%); }
-.dsh-tasks-card[data-stage="done"] .dsh-tasks-card-title { color: var(--dsw-alias-label-secondary); text-decoration: line-through; }
+.dsh-tasks-card[data-stage="done"] .dsh-tasks-card-title { display: flex; align-items: flex-start; gap: 5px; color: var(--dsw-alias-label-secondary); font-weight: 500; text-decoration: none; }
+.dsh-tasks-done-check { display: inline-flex; align-items: center; margin-top: 4px; flex: none; color: var(--dsh-paper-success, var(--dsw-alias-state-success-primary)); opacity: .78; }
 .dsh-tasks-stripe {
   position: absolute;
   left: 0;
@@ -523,9 +703,7 @@ window.__ModuleLoader__.load({
   font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
 }
 .dsh-tasks-card-brief {
   margin-top: 4px;
@@ -620,11 +798,13 @@ window.__ModuleLoader__.load({
 .dsh-tasks-add { width: 100%; border: 0; background: transparent; border-radius: 6px; color: var(--dsw-alias-label-secondary); padding: 5px; display: flex; align-items: center; justify-content: center; gap: 5px; cursor: pointer; font: inherit; }
 .dsh-tasks-add:hover { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); }
 .dsh-tasks-card-heading { display: flex; align-items: flex-start; gap: 4px; }
-.dsh-tasks-card-title { flex: 1; min-width: 0; border: 0; padding: 0; margin: 0; text-align: left; background: transparent; color: inherit; font-family: inherit; cursor: pointer; line-height: 20px; }
+.dsh-tasks-card-title { display: block; flex: 1; min-width: 0; min-height: 28px; height: auto; border: 0; padding: 2px 0; margin: 0;
+  text-align: start; background: transparent; color: inherit; font-family: inherit; cursor: pointer; line-height: 1.55; }
+@media (pointer: coarse) { .dsh-tasks-card-title { min-height: 44px; } }
 .dsh-tasks-card-actions { flex: none; position: relative; }
-.dsh-tasks-card-actions > summary { list-style: none; width: 20px; height: 20px; padding: 0; opacity: 0; }
+.dsh-tasks-card-actions > summary { list-style: none; width: 20px; height: 20px; padding: 0; opacity: .32; transition: opacity .15s ease; }
 .dsh-tasks-card-actions > summary::-webkit-details-marker { display: none; }
-.dsh-tasks-card:hover summary, .dsh-tasks-card:focus-within summary, .dsh-tasks-card-actions[open] > summary { opacity: 1; }
+.dsh-tasks-card:hover .dsh-tasks-card-actions > summary, .dsh-tasks-card:focus-within .dsh-tasks-card-actions > summary, .dsh-tasks-card-actions[open] > summary { opacity: 1; }
 .dsh-tasks-menu { position: absolute; right: 0; top: 24px; z-index: 4; padding: 5px; min-width: 150px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 8px; background: var(--dsw-alias-bg-base); box-shadow: 0 4px 16px rgb(0 0 0 / 12%); }
 .dsh-tasks-menu button { display: flex; align-items: center; gap: 7px; width: 100%; padding: 7px 9px; border: 0; border-radius: 5px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .dsh-tasks-menu button:hover { background: var(--dsw-alias-bg-layer-2); }
@@ -642,6 +822,7 @@ window.__ModuleLoader__.load({
 .dsh-tasks-dialog-head .dsh-tasks-logo { width: 36px; height: 36px; border-radius: 9px; }
 .dsh-tasks-dialog-body { padding: 0 24px 24px; }
 .dsh-tasks-grip { cursor: grab; touch-action: none; border: 0; background: none; color: inherit; font-size: 18px; padding: 2px 6px; }
+.dsh-tasks-grip:disabled { cursor: default; touch-action: auto; }
 .dsh-tasks-card[data-dragging] { opacity: .45; }
 .dsh-tasks-root [data-drop="true"] { outline: 2px dashed var(--dsh-tasks-focus); outline-offset: -2px; }
 .dsh-tasks-drag-preview { pointer-events: none; padding: 12px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); border-radius: 8px; box-shadow: 0 4px 18px #0003; }
@@ -710,10 +891,11 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
 .dsh-tasks-drawer .dsh-tasks-form { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .dsh-tasks-drawer .dsh-tasks-dialog-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .dsh-tasks-drawer .dsh-tasks-form-actions { flex: none; flex-wrap: wrap; justify-content: flex-end; min-height: 56px; box-sizing: border-box; padding-block: 10px; }
-.dsh-tasks-root .dsh-tasks-detail-head { flex: none; align-items: flex-start; gap: 8px; padding: 20px 24px 12px; }
+.dsh-tasks-root .dsh-tasks-detail-head { flex: none; align-items: flex-start; gap: 10px; padding: 18px 24px 12px; }
+.dsh-tasks-drawer .dsh-tasks-dialog-head > div { flex: 1; min-width: 0; }
 .dsh-tasks-detail-heading { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.dsh-tasks-root .dsh-tasks-detail-heading h2 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; line-height: 1.35; }
-.dsh-tasks-detail-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; color: var(--dsh-tasks-muted); font-size: 12px; }
+.dsh-tasks-root .dsh-tasks-detail-heading h2 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; line-height: 1.5; }
+.dsh-tasks-detail-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-top: 6px; color: var(--dsh-tasks-muted); font-size: 12px; }
 .dsh-tasks-detail-meta .dsh-tasks-card-state { margin: 0; }
 .dsh-tasks-root .dsh-tasks-copy-id { display: inline-flex; align-items: center; justify-content: center; flex: none; gap: 4px; min-width: 44px; min-height: 28px; height: auto; padding: 2px 6px; border: 1px solid transparent; border-radius: var(--dsw-radius-sm, 6px); background: none; color: inherit; font: inherit; white-space: nowrap; cursor: pointer; }
 .dsh-tasks-root .dsh-tasks-copy-id:hover { color: var(--dsh-tasks-ink); background: var(--dsh-tasks-paper); border-color: var(--dsh-tasks-line); }
@@ -737,7 +919,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
 .dsh-tasks-description-head { display: flex; align-items: center; justify-content: space-between; gap: 4px 12px; flex-wrap: wrap; }
 .dsh-tasks-description-actions { display: inline-flex; gap: 4px; }
 .dsh-tasks-description-action { min-block-size: 28px; padding: 2px 8px; border: 1px solid transparent; border-radius: var(--dsw-radius-xs, 6px); background: transparent; color: var(--dsh-tasks-muted); font: inherit; font-size: 12px; cursor: pointer; }
-.dsh-tasks-description-action:is(:hover:not(:disabled), [aria-pressed=true]) { color: var(--dsh-tasks-ink); border-color: var(--dsh-tasks-line); background: var(--dsh-tasks-highlight); }
+.dsh-tasks-description-action:hover:not(:disabled) { color: var(--dsh-tasks-ink); border-color: var(--dsh-tasks-rule); background: color-mix(in srgb, var(--dsh-tasks-muted) 8%, transparent); }
 .dsh-tasks-description-action:disabled { opacity: .55; cursor: default; }
 @media (pointer: coarse) { .dsh-tasks-description-action { min-block-size: 44px; } }
 .dsh-tasks-description-body { min-inline-size: 0; }
@@ -750,6 +932,13 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
 .dsh-tasks-description-empty { margin: 0; color: var(--dsh-tasks-muted); }
 .dsh-tasks-task-fields :is(.dsh-tasks-input, .dsh-tasks-select-trigger) { min-height: 36px; }
 .dsh-tasks-task-fields :is(.dsh-tasks-properties, .dsh-tasks-bindings) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.dsh-tasks-task-fields .dsh-tasks-date-field { grid-column: auto; grid-template-columns: minmax(0, 1fr); }
+@container task-detail (min-width: 460px) {
+  .dsh-tasks-task-fields .dsh-tasks-properties { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@container task-detail (min-width: 361px) and (max-width: 459px) {
+  .dsh-tasks-task-fields .dsh-tasks-date-field { grid-column: 1 / -1; }
+}
 @container task-detail (max-width: 360px) { .dsh-tasks-task-fields :is(.dsh-tasks-properties, .dsh-tasks-bindings) { grid-template-columns: minmax(0, 1fr); } }
 .dsh-tasks-detail-actions { justify-content: flex-end; }
 .dsh-tasks-detail-activity { overflow-wrap: anywhere; }
@@ -818,7 +1007,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
 .dsh-tasks-filter > summary { list-style: none; display: flex; gap: 5px; align-items: center; cursor: pointer; }
 .dsh-tasks-filter > summary::-webkit-details-marker { display: none; }
 .dsh-tasks-filter select { max-width: 230px; }
-@media (hover: none) { .dsh-tasks-card-actions > summary { opacity: 1; } }
+@media (hover: none), (pointer: coarse) { .dsh-tasks-card-actions > summary { opacity: .85; } .dsh-tasks-card-actions[open] > summary { opacity: 1; } }
 @media (max-width: 620px) { .dsh-tasks-bindings { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .dsh-tasks-card { transition: none; } }
 `
@@ -866,7 +1055,6 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
 
     const PAPER_CSS = `
 .dsh-tasks-root .dsh-tasks-paper-note { display: none; }
-.dsh-tasks-root .dsh-tasks-status-label { display: contents; }
 :is(body[data-dsh-task-appearance="paper"], body[data-dsh-paper-theme="paper"]:not([data-dsh-task-appearance="ios"])) .dsh-tasks-root {
   --dsh-tasks-desk: var(--dsh-paper-desk);
   --dsh-tasks-paper: var(--dsh-paper-paper);
@@ -905,54 +1093,70 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
     background: var(--dsh-tasks-fibre), var(--dsh-tasks-tape); background-size: 160px 160px; transform: rotate(-4deg); pointer-events: none;
     clip-path: polygon(2% 0, 99% 3%, 97% 20%, 100% 40%, 98% 65%, 100% 99%, 1% 96%, 3% 75%, 0 54%, 2% 28%);
   }
-  & .dsh-tasks-col[data-stage="doing"]::before { transform: rotate(3deg); background-color: var(--dsh-paper-tapeInfo, var(--dsh-tasks-tape)); }
-  & .dsh-tasks-col[data-stage="done"]::before { transform: rotate(-2deg); background-color: var(--dsh-paper-tapeSuccess, var(--dsh-tasks-tape)); }
+  & .dsh-tasks-col[data-stage="todo"]:not([data-column-id="stage:todo"])::before { transform: rotate(-3deg); }
+  & .dsh-tasks-col[data-stage="todo"]:not([data-column-id="stage:todo"]):not([data-column-color])::before {
+    background-color: color-mix(in srgb, color-mix(in srgb, var(--dsh-paper-syntaxFunction, #8451b4) 42%, var(--dsh-paper-sheet, #fffef8)) 78%, transparent);
+  }
+  & .dsh-tasks-col[data-stage="todo"][data-column-id="stage:todo"]::before { transform: rotate(1.5deg); }
+  & .dsh-tasks-col[data-stage="doing"]::before { transform: rotate(3deg); }
+  & .dsh-tasks-col[data-stage="doing"]:not([data-column-color])::before { background-color: var(--dsh-paper-tapeInfo, var(--dsh-tasks-tape)); }
+  & .dsh-tasks-col[data-stage="done"]::before { transform: rotate(-2deg); }
+  & .dsh-tasks-col[data-stage="done"]:not([data-column-color])::before { background-color: var(--dsh-paper-tapeSuccess, var(--dsh-tasks-tape)); }
+  & .dsh-tasks-col[data-column-color]::before {
+    background-color: color-mix(in srgb, color-mix(in srgb, var(--dsh-tasks-col-color) 46%, var(--dsh-paper-sheet, #fffef8)) 82%, transparent);
+  }
   & .dsh-tasks-colhead { padding: 22px 16px 13px; }
   & .dsh-tasks-coltitle { min-height: 28px; gap: 10px; }
   & .dsh-tasks-colname { font-size: 16px; letter-spacing: .05em; position: relative; isolation: isolate; }
   & .dsh-tasks-colname::before { content: ''; position: absolute; z-index: -1; inset: 35% -5px 0 -3px; background: var(--dsh-tasks-highlight); border-radius: 35% 12% 20% 8% / 22% 30% 35% 38%; transform: rotate(-2deg); pointer-events: none; }
-  & .dsh-tasks-col[data-stage="doing"] .dsh-tasks-colname::before { background: var(--dsh-paper-markerInfo, var(--dsh-paper-infoSoft)); }
-  & .dsh-tasks-col[data-stage="done"] .dsh-tasks-colname::before { background: var(--dsh-paper-markerSuccess, var(--dsh-paper-successSoft)); }
+  & .dsh-tasks-col[data-stage="todo"]:not([data-column-id="stage:todo"]):not([data-column-color]) .dsh-tasks-colname::before { background: color-mix(in srgb, var(--dsh-paper-syntaxFunction, #8451b4) 24%, var(--dsh-paper-sheet, #fffef8)); }
+  & .dsh-tasks-col[data-stage="doing"]:not([data-column-color]) .dsh-tasks-colname::before { background: var(--dsh-paper-markerInfo, var(--dsh-paper-infoSoft)); }
+  & .dsh-tasks-col[data-stage="done"]:not([data-column-color]) .dsh-tasks-colname::before { background: var(--dsh-paper-markerSuccess, var(--dsh-paper-successSoft)); }
+  & .dsh-tasks-col[data-column-color] .dsh-tasks-colname::before { background: color-mix(in srgb, var(--dsh-tasks-col-color) 24%, var(--dsh-paper-sheet, #fffef8)); }
   & .dsh-tasks-count { color: var(--dsh-tasks-muted); background: transparent; border: 0; padding: 0; font-size: 12px; }
   & .dsh-tasks-collist { padding: 4px 12px 8px; }
   & .dsh-tasks-card {
-    position: relative; padding: 14px; margin-bottom: 13px; color: var(--dsh-tasks-ink);
-    border: 1px solid color-mix(in srgb, var(--dsh-tasks-line) 55%, transparent); border-radius: var(--dsw-radius-lg, 16px);
+    position: relative; padding: 12px 13px; margin-bottom: 11px; color: var(--dsh-tasks-ink);
+    border: 1px solid color-mix(in srgb, var(--dsh-tasks-line) 55%, transparent); border-radius: 12px;
     background-color: var(--dsh-paper-card, var(--dsh-tasks-paper));
     background-image: linear-gradient(var(--dsh-paper-cardWash, transparent), var(--dsh-paper-cardWash, transparent)), var(--dsh-tasks-fibre), var(--dsh-tasks-slip);
     background-size: auto, 240px 240px, 128px 128px; background-position: var(--dsh-tasks-paper-x) var(--dsh-tasks-paper-y);
-    box-shadow: 0 2px 0 -1px var(--dsh-paper-edge, var(--dsh-tasks-line)), 1px 3px 0 -1px var(--dsh-tasks-line), 0 7px 12px -6px var(--dsh-tasks-shadow);
+    box-shadow: 0 1px 0 color-mix(in srgb, var(--dsh-tasks-line) 42%, transparent), 0 4px 10px -6px var(--dsh-tasks-shadow);
   }
-  & .dsh-tasks-card:hover { border-color: var(--dsh-tasks-focus); }
+  & .dsh-tasks-card:hover {
+    border-color: color-mix(in srgb, var(--dsh-tasks-focus) 55%, var(--dsh-tasks-line));
+    box-shadow: 0 1px 0 color-mix(in srgb, var(--dsh-tasks-focus) 28%, var(--dsh-tasks-line)), 0 6px 14px -6px var(--dsh-tasks-shadow);
+  }
   & .dsh-tasks-card-title { font-size: 14px; line-height: 24px; letter-spacing: .01em; }
-  & .dsh-tasks-card[data-stage="done"] .dsh-tasks-card-title { color: var(--dsh-tasks-muted); text-decoration-color: color-mix(in srgb, var(--dsh-tasks-muted) 65%, transparent); }
+  & .dsh-tasks-card[data-stage="done"] { background-color: color-mix(in srgb, var(--dsh-paper-card, var(--dsh-tasks-paper)) 78%, var(--dsh-tasks-sheet)); border-color: color-mix(in srgb, var(--dsh-tasks-line) 42%, transparent); box-shadow: 0 1px 2px color-mix(in srgb, var(--dsh-tasks-shadow) 45%, transparent); }
+  & .dsh-tasks-card[data-stage="done"]:hover { border-color: var(--dsh-tasks-line); }
+  & .dsh-tasks-card[data-stage="done"] .dsh-tasks-card-title { color: color-mix(in srgb, var(--dsh-tasks-ink) 66%, var(--dsh-tasks-muted)); font-weight: 500; text-decoration: none; }
   & :is(.dsh-tasks-card-brief, .dsh-tasks-card-meta, .dsh-tasks-card-state, .dsh-tasks-menu-label, .dsh-tasks-field-hint, .dsh-tasks-draft-hint, .dsh-tasks-optional, .dsh-tasks-detail-grid dt) { color: var(--dsh-tasks-muted); }
   & .dsh-tasks-card-brief { margin-top: 7px; line-height: 1.75; }
   & .dsh-tasks-card-meta { font-family: inherit; font-size: 11px; padding-top: 4px; }
   & .dsh-tasks-card-state { margin: 10px 0 5px; gap: 7px; flex-wrap: wrap; }
-  & .dsh-tasks-status-label { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; min-height: 18px; border: 1px solid color-mix(in srgb, currentColor 32%, transparent); border-radius: 999px; color: var(--dsh-tasks-muted); background: var(--dsh-paper-sheet); }
-  & [data-task-status="running"] .dsh-tasks-status-label { color: var(--dsh-paper-info); background: var(--dsh-paper-infoSoft); }
-  & :is([data-task-status="approval"], [data-task-status="question"]) .dsh-tasks-status-label { color: var(--dsh-paper-warning); background: var(--dsh-paper-warningSoft); }
-  & [data-task-status="error"] .dsh-tasks-status-label { color: var(--dsh-paper-danger); background: var(--dsh-paper-dangerSoft); }
-  & [data-task-status="idle"] .dsh-tasks-status-label { color: var(--dsh-paper-success); background: var(--dsh-paper-successSoft); }
-  & .dsh-tasks-dot { border-color: currentColor; width: 6px; height: 6px; }
   & :is(.dsh-tasks-primary, .dsh-tasks-secondary, .dsh-tasks-retry) { min-height: 30px; height: auto; box-sizing: border-box; padding: 4px 10px; border: 1px solid var(--dsh-tasks-line); color: var(--dsh-tasks-ink); background: var(--dsh-tasks-paper); box-shadow: 1px 1px 0 color-mix(in srgb, var(--dsh-tasks-line) 55%, transparent); }
   & .dsh-tasks-primary { background: var(--dsh-paper-accent); color: var(--dsh-paper-onAccent); border-color: var(--dsh-paper-accent); font-weight: 600; box-shadow: none; }
   & :is(.dsh-tasks-secondary, .dsh-tasks-retry):hover:not(:disabled) { background: var(--dsh-paper-accentSoft); border-color: var(--dsh-tasks-focus); opacity: 1; }
   & .dsh-tasks-primary:hover:not(:disabled) { background: var(--dsh-paper-accentHover); border-color: var(--dsh-paper-accentHover); opacity: 1; }
-  & .dsh-tasks-card-buttons { flex-wrap: wrap; border-top: 1px dashed var(--dsh-tasks-rule); padding-top: 10px; }
+  & .dsh-tasks-card-buttons { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 0; border-top: none; padding-top: 0; }
   & .dsh-tasks-icon-button { color: var(--dsh-tasks-muted); min-width: 26px; min-height: 26px; }
   & .dsh-tasks-icon-button:hover { color: var(--dsh-tasks-ink); background: color-mix(in srgb, var(--dsh-tasks-highlight) 35%, transparent); }
-  & .dsh-tasks-card-actions > summary { opacity: 1; width: 24px; height: 24px; }
+  & .dsh-tasks-card-actions > summary { opacity: .32; width: 24px; height: 24px; transition: opacity .15s ease; }
+  & .dsh-tasks-card:hover .dsh-tasks-card-actions > summary, & .dsh-tasks-card:focus-within .dsh-tasks-card-actions > summary, & .dsh-tasks-card-actions[open] > summary { opacity: 1; }
   & .dsh-tasks-search { color: var(--dsh-tasks-ink); background: var(--dsh-tasks-paper); border-color: var(--dsh-tasks-line); }
   & :is(.dsh-tasks-search, .dsh-tasks-fields input:not([type=checkbox], [type=radio]), .dsh-tasks-fields textarea)::placeholder { color: var(--dsh-tasks-muted); opacity: 1; }
-  & .dsh-tasks-colfoot { border-top: 1px solid var(--dsh-tasks-rule); padding: 10px 12px; }
+  & .dsh-tasks-colfoot {
+    border-top: 0;
+    padding: 6px 12px 10px;
+    border-radius: 0 0 var(--dsw-radius-xl, 20px) var(--dsw-radius-xl, 20px);
+    background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--dsh-tasks-sheet) 82%, transparent) 32%, var(--dsh-tasks-sheet) 100%);
+  }
   & .dsh-tasks-add { color: var(--dsh-tasks-muted); border: 1px dashed var(--dsh-tasks-line); min-height: 30px; }
   & .dsh-tasks-add:hover { color: var(--dsh-tasks-ink); background: var(--dsh-tasks-paper); }
   & .dsh-tasks-empty { padding: 38px 4px; line-height: 1.8; color: var(--dsh-tasks-muted); }
   & .dsh-tasks-empty::before { content: ''; display: block; width: 42px; height: 55px; margin: 0 auto 20px; border: 1px solid var(--dsh-tasks-line); border-radius: var(--dsw-radius-xs, 6px); transform: rotate(-5deg); background: repeating-linear-gradient(0deg, transparent 0 10px, var(--dsh-tasks-rule) 10px 11px), var(--dsh-tasks-paper); box-shadow: 3px 3px 0 color-mix(in srgb, var(--dsh-tasks-line) 20%, transparent); }
-  & .dsh-tasks-attention { margin-top: 14px !important; padding: 10px 14px; background: var(--dsh-paper-warningSoft); border: 1px solid var(--dsh-paper-warning); color: var(--dsh-tasks-ink); box-shadow: 0 2px 3px var(--dsh-tasks-shadow); }
-  & .dsh-tasks-attention summary { min-height: 24px; cursor: pointer; }
+  &.dsh-tasks-board-view:has(> :is(.dsh-tasks-attention, .dsh-tasks-active-filters)) { --dsh-tasks-board-top: 24px; }
   & .dsh-tasks-footnote { padding: 0 var(--dsh-tasks-board-gutter) 13px; color: var(--dsh-paper-muted); }
   & .dsh-tasks-menu { color: var(--dsh-tasks-ink); background: var(--dsh-tasks-paper); border-color: var(--dsh-tasks-line); }
   & .dsh-tasks-menu button:hover { background: var(--dsh-tasks-highlight); }
@@ -964,8 +1168,8 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
   & .dsh-tasks-dialog-head p { color: var(--dsh-tasks-muted); }
   & .dsh-tasks-form-actions { border-color: var(--dsh-tasks-rule); }
   & :is(.dsh-tasks-fields input:not([type=checkbox], [type=radio]), .dsh-tasks-fields textarea, .dsh-tasks-stage) { color: var(--dsh-tasks-ink); background: var(--dsh-tasks-paper); border-color: var(--dsh-tasks-line); }
-  & :is(.dsh-tasks-search, .dsh-tasks-primary, .dsh-tasks-secondary, .dsh-tasks-retry, .dsh-tasks-add, .dsh-tasks-icon-button, .dsh-tasks-fields input:not([type=checkbox], [type=radio]), .dsh-tasks-fields textarea, .dsh-tasks-select-trigger) { border-radius: var(--dsw-radius-sm, 10px); }
-  & :is(.dsh-tasks-menu, .dsh-tasks-select-list, .dsh-tasks-attention) { border-radius: var(--dsw-radius-md, 14px); }
+  & :is(.dsh-tasks-search, .dsh-tasks-primary, .dsh-tasks-secondary, .dsh-tasks-retry, .dsh-tasks-add, .dsh-tasks-done-range, .dsh-tasks-icon-button, .dsh-tasks-fields input:not([type=checkbox], [type=radio]), .dsh-tasks-fields textarea, .dsh-tasks-select-trigger) { border-radius: var(--dsw-radius-sm, 10px); }
+  & :is(.dsh-tasks-menu, .dsh-tasks-select-list) { border-radius: var(--dsw-radius-md, 14px); }
   & :is(.dsh-tasks-menu button, .dsh-tasks-select-option) { border-radius: var(--dsw-radius-xs, 6px); }
   & :is(input, textarea, select, button, summary):focus-visible { outline: 2px solid var(--dsh-tasks-focus); outline-offset: 3px; }
   & :is(input, textarea, .dsh-tasks-select-trigger):focus { outline: none; box-shadow: none; border-color: var(--dsh-tasks-focus); }
@@ -984,14 +1188,16 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
   }
   @media (max-width: 600px) { & .dsh-tasks-drawer { border-radius: 0; } }
   @media (pointer: coarse) { & :is(button, summary, select, .dsh-tasks-search) { min-height: 44px; } & .dsh-tasks-card-actions > summary { min-width: 44px; } }
+  @media (hover: none), (pointer: coarse) { & .dsh-tasks-card-actions > summary { opacity: .85; } & .dsh-tasks-card-actions[open] > summary { opacity: 1; } }
   @media (prefers-reduced-motion: reduce) { & * { transition: none; } }
   @media (forced-colors: active) { & { background: Canvas; color: CanvasText; } & :is(.dsh-tasks-board-toolbar, .dsh-tasks-col, .dsh-tasks-card, .dsh-tasks-dialog, .dsh-tasks-status-label, .dsh-tasks-attention) { background: Canvas; color: CanvasText; border: 1px solid CanvasText; box-shadow: none; } & :is(.dsh-tasks-col, .dsh-tasks-colname)::before { display: none; } & :is(button, input, textarea, select, summary):focus-visible { outline-color: Highlight; } }
 }
 `
 
-    const boardLayout = { columnMin: 312, columnMax: 390, collapsed: 48, maxGutter: 24, maxGap: 20, insightsMin: 296, wide: 1160 }
+    const boardLayout = { columnMin: 280, collapsed: 48, maxGutter: 24, maxGap: 20, insightsMin: 250, insightsMax: 420, wide: 1100 }
     const BOARD_CONTROLS_CSS = `
 .dsh-tasks-board-view {
+  position: relative;
   min-width: 0;
   --dsh-tasks-panel-gutter: clamp(12px, 1.6cqw, ${boardLayout.maxGutter}px);
   --dsh-tasks-panel-gap: clamp(12px, 1.4cqw, ${boardLayout.maxGap}px);
@@ -1039,7 +1245,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
 .dsh-tasks-board-settings .dsh-tasks-appearance label { flex-wrap: wrap; }
 .dsh-tasks-workspace {
   display: flex; flex: 1; min-width: 0; min-height: 0;
-  --dsh-tasks-board-preferred: calc(var(--dsh-tasks-expanded) * ${boardLayout.columnMax}px + var(--dsh-tasks-collapsed) * ${boardLayout.collapsed}px + var(--dsh-tasks-gaps) * var(--dsh-tasks-panel-gap) + 2 * var(--dsh-tasks-panel-gutter));
+  --dsh-tasks-board-min: calc(var(--dsh-tasks-expanded) * ${boardLayout.columnMin}px + var(--dsh-tasks-collapsed) * ${boardLayout.collapsed}px + var(--dsh-tasks-gaps) * var(--dsh-tasks-panel-gap) + 3 * var(--dsh-tasks-panel-gutter));
   --dsh-tasks-insight-min: ${boardLayout.insightsMin}px;
 }
 .dsh-tasks-root.dsh-tasks-board-view .dsh-tasks-workspace > .dsh-tasks-board.dsh-tasks-board-strip {
@@ -1048,10 +1254,10 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
   overscroll-behavior-inline: contain;
 }
 .dsh-tasks-root.dsh-tasks-board-view .dsh-tasks-workspace > .dsh-tasks-board > .dsh-tasks-col {
-  box-sizing: border-box; min-width: min(${boardLayout.columnMin}px, calc(100cqw - 2 * var(--dsh-tasks-panel-gutter))); max-width: ${boardLayout.columnMax}px;
+  box-sizing: border-box; flex: 1 1 0; min-width: min(${boardLayout.columnMin}px, calc(100cqw - 2 * var(--dsh-tasks-panel-gutter))); max-width: none;
 }
-.dsh-tasks-root.dsh-tasks-board-view .dsh-tasks-workspace[data-show-insights] > .dsh-tasks-board-strip {
-  flex: 0 0 min(var(--dsh-tasks-board-preferred), calc(100% - var(--dsh-tasks-insight-min) - var(--dsh-tasks-panel-gutter)));
+.dsh-tasks-workspace[data-show-insights] > .dsh-tasks-insights {
+  flex: 0 0 min(clamp(var(--dsh-tasks-insight-min), 23%, ${boardLayout.insightsMax}px), max(var(--dsh-tasks-insight-min), 100% - var(--dsh-tasks-board-min)));
 }
 @media (hover: hover) and (pointer: fine) and (forced-colors: none) {
   @supports selector(::-webkit-scrollbar) {
@@ -1078,9 +1284,16 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
   }
 }
 .dsh-tasks-root .dsh-tasks-workspace .dsh-tasks-colhead { justify-content: flex-start; flex-wrap: wrap; gap: 4px; padding-inline: 12px; }
+.dsh-tasks-root .dsh-tasks-workspace .dsh-tasks-col:not([data-collapsed]) .dsh-tasks-colhead { flex-wrap: nowrap; }
 .dsh-tasks-root .dsh-tasks-workspace .dsh-tasks-coltitle { flex: 1 1 60px; gap: 6px; justify-content: flex-start; height: auto; }
 .dsh-tasks-workspace .dsh-tasks-coltitle .dsh-tasks-count { flex: none; white-space: nowrap; }
 .dsh-tasks-workspace .dsh-tasks-colhead > .dsh-tasks-icon-button { flex: none; }
+.dsh-tasks-workspace .dsh-tasks-colhead > .dsh-tasks-col-rename { opacity: 0; pointer-events: none; transition: opacity .15s ease; }
+.dsh-tasks-workspace .dsh-tasks-colhead:is(:hover, :focus-within) > .dsh-tasks-col-rename,
+.dsh-tasks-workspace .dsh-tasks-colhead > .dsh-tasks-col-rename:focus-visible { opacity: 1; pointer-events: auto; }
+@media (hover: none), (pointer: coarse) {
+  .dsh-tasks-workspace .dsh-tasks-colhead > .dsh-tasks-col-rename { opacity: 1; pointer-events: auto; }
+}
 .dsh-tasks-root .dsh-tasks-colhead .dsh-tasks-column-grip { flex: none; cursor: grab; touch-action: none; padding: 0; color: var(--dsh-tasks-muted); }
 .dsh-tasks-root .dsh-tasks-colhead .dsh-tasks-column-grip:is(:hover, :focus-visible) { color: var(--dsh-tasks-focus); background: color-mix(in srgb, var(--dsh-tasks-focus) 9%, transparent); }
 .dsh-tasks-root .dsh-tasks-colhead .dsh-tasks-column-grip:active { cursor: grabbing; }
@@ -1132,8 +1345,20 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
 .dsh-tasks-root .dsh-tasks-col[data-collapsed] .dsh-tasks-colname { writing-mode: vertical-rl; max-height: 12em; overflow: hidden; }
 .dsh-tasks-root .dsh-tasks-coltitle { min-width: 0; }
 .dsh-tasks-root .dsh-tasks-colname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dsh-tasks-root .dsh-tasks-done-range { order: 1; flex: 0 0 100%; justify-content: flex-start; white-space: normal; font-size: 12px; min-height: 28px; border: 0; background: transparent; text-decoration: underline dotted; text-underline-offset: 3px; }
-@media (pointer: coarse) { .dsh-tasks-root .dsh-tasks-done-range { min-height: 44px; } }
+.dsh-tasks-root .dsh-tasks-colfoot[data-has-range] { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dsh-tasks-root .dsh-tasks-colfoot[data-has-range] .dsh-tasks-done-range {
+  flex: 1 1 auto; min-width: 0; justify-content: center; gap: 4px; min-height: 30px; padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--dsh-tasks-line) 75%, transparent); border-radius: var(--dsw-radius-sm, 8px);
+  background: color-mix(in srgb, var(--dsh-tasks-paper) 72%, transparent); color: var(--dsh-tasks-muted);
+  font-size: 12px; text-decoration: none; white-space: nowrap; transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.dsh-tasks-root .dsh-tasks-colfoot[data-has-range] .dsh-tasks-done-range:is(:hover, :focus-visible) {
+  color: var(--dsh-tasks-ink); background: var(--dsh-tasks-paper); border-color: var(--dsh-tasks-line);
+}
+.dsh-tasks-root .dsh-tasks-colfoot[data-has-range] .dsh-tasks-add { flex: 0 0 auto; width: auto; padding: 4px 11px; white-space: nowrap; }
+@media (pointer: coarse) {
+  .dsh-tasks-root .dsh-tasks-colfoot[data-has-range] :is(.dsh-tasks-done-range, .dsh-tasks-add) { min-height: 44px; }
+}
 .dsh-tasks-insights {
   display: none; flex-direction: column; flex: 1 0 var(--dsh-tasks-insight-min); min-width: 0; min-height: 0; box-sizing: border-box;
   align-self: flex-start; max-height: calc(100% - var(--dsh-tasks-board-top) - var(--dsh-tasks-board-bottom));
@@ -1154,6 +1379,8 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
 .dsh-tasks-insights header { border-bottom: 1px dashed var(--dsh-tasks-line); padding-bottom: 12px; }
 .dsh-tasks-insights h2, .dsh-tasks-insights h3 { display: flex; align-items: center; gap: 7px; margin: 0; }
 .dsh-tasks-insights header h2 { font-size: 16px; }
+.dsh-tasks-insight-header-actions { display: flex; align-items: center; gap: 6px; }
+.dsh-tasks-insight-close { width: 22px; height: 22px; padding: 2px; }
 .dsh-tasks-insight-sync { color: var(--dsh-tasks-muted); border: 1px dashed currentColor; border-radius: 5px; padding: 2px 6px; font-size: 11px; }
 .dsh-tasks-insight-sync[data-live=true] { color: var(--dsw-alias-state-success-primary); }
 .dsh-tasks-insights header h2 > .dsh-tasks-icon { color: var(--dsh-tasks-focus); }
@@ -1219,6 +1446,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
 .dsh-tasks-due-overview h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 15px; }
 .dsh-tasks-due-overview p { margin: 5px 0 12px; color: var(--dsh-tasks-muted); font-size: 12px; }
 .dsh-tasks-due-overview p:last-child { margin-bottom: 0; }
+.dsh-tasks-due-overview .dsh-tasks-empty-hint { margin: 6px 0 0; font-size: 11px; color: var(--dsh-tasks-muted); }
 .dsh-tasks-due-overview button { display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 4px 8px; width: 100%; padding: 7px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: inherit; text-align: start; font: inherit; cursor: pointer; }
 .dsh-tasks-due-overview button:disabled { color: var(--dsh-tasks-muted); cursor: default; }
 .dsh-tasks-due-overview button:not(:disabled):hover, .dsh-tasks-due-overview button[aria-pressed=true] { background: var(--dsw-alias-bg-layer-2); }
@@ -1227,7 +1455,56 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
 .dsh-tasks-due-track > span { display: block; height: 100%; border-radius: inherit; background: var(--dsh-tasks-focus); }
 .dsh-tasks-due-overview [data-period=overdue] .dsh-tasks-due-track > span { background: var(--dsw-alias-state-error-primary); }
 .dsh-tasks-due-count { font-variant-numeric: tabular-nums; }
-.dsh-tasks-due-chip { align-self: start; display: inline-flex; align-items: center; gap: 6px; margin: 6px var(--dsh-tasks-board-gutter,16px) 0; padding: 4px 8px; border: 1px solid var(--dsh-tasks-line); border-radius: 6px; color: var(--dsh-tasks-ink); background: var(--dsh-tasks-paper); font: inherit; cursor: pointer; }
+.dsh-tasks-active-filters {
+  flex: none; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px;
+  margin: 10px var(--dsh-tasks-panel-gutter) 0;
+}
+.dsh-tasks-root :is(.dsh-tasks-filter-chip, .dsh-tasks-due-chip) {
+  --chip-tone: var(--dsh-tasks-focus);
+  box-sizing: border-box; display: inline-flex; align-items: center; gap: 5px;
+  min-height: 26px; max-width: 100%; padding: 2px 8px 2px 9px;
+  border: 1px solid color-mix(in srgb, var(--chip-tone) 28%, var(--dsh-tasks-rule));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chip-tone) 8%, var(--dsh-tasks-paper));
+  color: var(--dsh-tasks-ink); font: inherit; font-size: 12px; line-height: 18px;
+  cursor: pointer; transition: border-color .15s ease, background-color .15s ease;
+}
+.dsh-tasks-root :is(.dsh-tasks-filter-chip, .dsh-tasks-due-chip):is(:hover, :focus-visible) {
+  border-color: color-mix(in srgb, var(--chip-tone) 58%, var(--dsh-tasks-line));
+  background: color-mix(in srgb, var(--chip-tone) 13%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-root :is(.dsh-tasks-filter-chip, .dsh-tasks-due-chip) > .dsh-tasks-icon:first-child { color: var(--chip-tone); flex: none; }
+.dsh-tasks-root :is(.dsh-tasks-filter-chip, .dsh-tasks-due-chip) > .dsh-tasks-icon:last-child { flex: none; color: var(--dsh-tasks-muted); opacity: .65; transition: opacity .15s ease, color .15s ease; }
+.dsh-tasks-root :is(.dsh-tasks-filter-chip, .dsh-tasks-due-chip):is(:hover, :focus-visible) > .dsh-tasks-icon:last-child { opacity: 1; color: var(--dsh-tasks-ink); }
+.dsh-tasks-filter-chip-swatch {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  border: 1px solid color-mix(in srgb, var(--dsh-tasks-ink) 20%, transparent);
+}
+.dsh-tasks-filter-chip-key { flex: none; font-size: 11px; color: var(--dsh-tasks-muted); }
+.dsh-tasks-filter-chip-value { min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
+.dsh-tasks-root .dsh-tasks-due-chip[data-overdue],
+.dsh-tasks-root .dsh-tasks-filter-chip[data-priority="P0" i] { --chip-tone: var(--dsh-paper-danger, var(--dsh-ios-danger, var(--dsw-alias-state-error-primary, #ba3548))); }
+.dsh-tasks-root .dsh-tasks-filter-chip[data-priority="P1" i] { --chip-tone: var(--dsh-paper-warning, var(--dsh-ios-warning, var(--dsw-alias-state-warn-primary, #865a05))); }
+.dsh-tasks-root .dsh-tasks-filter-chip[data-priority="P2" i] { --chip-tone: var(--dsh-paper-info, var(--dsh-ios-info, var(--dsw-alias-state-business-primary, #176da0))); }
+.dsh-tasks-root .dsh-tasks-filter-chip[data-filter-key="ready"] { --chip-tone: var(--dsh-paper-success, var(--dsh-ios-success, var(--dsw-alias-state-success-primary))); }
+.dsh-tasks-root button.dsh-tasks-filter-clear {
+  box-sizing: border-box; min-height: 26px; padding: 2px 8px;
+  border: 1px solid transparent; border-radius: 999px;
+  background: transparent; color: var(--dsh-tasks-focus); font: inherit; font-size: 12px; font-weight: 550;
+  cursor: pointer; transition: background-color .15s ease, color .15s ease;
+}
+.dsh-tasks-root button.dsh-tasks-filter-clear:is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--dsh-tasks-focus) 10%, transparent);
+}
+@media (pointer: coarse) {
+  .dsh-tasks-root :is(.dsh-tasks-filter-chip, .dsh-tasks-due-chip, button.dsh-tasks-filter-clear) { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dsh-tasks-root :is(.dsh-tasks-filter-chip, .dsh-tasks-due-chip, .dsh-tasks-filter-chip > .dsh-tasks-icon:last-child, .dsh-tasks-due-chip > .dsh-tasks-icon:last-child, button.dsh-tasks-filter-clear) { transition: none; }
+}
+@media (forced-colors: active) {
+  .dsh-tasks-root :is(.dsh-tasks-filter-chip, .dsh-tasks-due-chip) { background: Canvas; color: CanvasText; border-color: CanvasText; }
+}
 .dsh-tasks-root .dsh-tasks-menu[popover] { position: fixed; inset: auto; margin: 0; box-sizing: border-box; max-width: calc(100vw - 16px); overflow: auto; overscroll-behavior: contain; color: var(--dsh-tasks-ink); background: var(--dsh-tasks-paper); border: 1px solid var(--dsh-tasks-line); border-radius: 12px; box-shadow: 0 8px 26px -8px var(--dsh-tasks-shadow); }
 .dsh-tasks-filter-panel { width: 304px; padding: 14px; }
 .dsh-tasks-filter-panel:popover-open { display: grid; gap: 12px; }
@@ -1266,6 +1543,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
 .dsh-tasks-manage-title { margin: 0 0 9px; font-size: 13px; font-weight: 650; }
 .dsh-tasks-manage-list { padding: 0 10px; background: var(--dsh-tasks-paper); border: 1px solid var(--dsh-tasks-rule); border-radius: 10px; }
 .dsh-tasks-management .dsh-tasks-manage-list form { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 6px; margin: 0; padding: 9px 0; background: transparent; border: 0; border-radius: 0; }
+.dsh-tasks-root .dsh-tasks-column-manager .dsh-tasks-manage-list form { grid-template-columns: auto auto minmax(0,1fr) auto; }
 .dsh-tasks-manage-list form + form { border-top: 1px solid var(--dsh-tasks-rule) !important; }
 .dsh-tasks-row-name { min-width: 0; }
 .dsh-tasks-row-name small { display: block; margin-inline-start: 7px; font-size: 11px; color: var(--dsh-tasks-muted); overflow-wrap: anywhere; }
@@ -1280,7 +1558,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
 .dsh-tasks-management .dsh-tasks-manage-create :is(.dsh-tasks-input, .dsh-tasks-primary) { min-height: 36px; }
 .dsh-tasks-root .dsh-tasks-column-manager .dsh-tasks-manage-create {
   --dsh-tasks-add-column-control: 36px;
-  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  grid-template-columns: auto minmax(0, 1.15fr) minmax(0, .85fr) auto;
 }
 .dsh-tasks-root .dsh-tasks-column-manager .dsh-tasks-manage-create :is(.dsh-tasks-input, .dsh-tasks-select-trigger) {
   box-sizing: border-box; inline-size: 100%; min-inline-size: 0; margin: 0;
@@ -1292,42 +1570,727 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
   min-height: var(--dsh-tasks-add-column-control); max-inline-size: 100%;
 }
 @media (pointer: coarse) { .dsh-tasks-root .dsh-tasks-column-manager .dsh-tasks-manage-create { --dsh-tasks-add-column-control: 44px; } }
+.dsh-tasks-col-color-field { display: grid; gap: 5px; min-width: 0; font-size: 12px; color: var(--dsh-tasks-muted); }
+.dsh-tasks-col-color-picker { position: relative; display: inline-flex; }
+.dsh-tasks-col-color-picker > summary { list-style: none; }
+.dsh-tasks-col-color-picker > summary::-webkit-details-marker { display: none; }
+.dsh-tasks-col-color-trigger {
+  box-sizing: border-box; display: inline-grid; place-items: center;
+  width: 32px; height: 32px; padding: 0;
+  border: 1px solid var(--dsh-tasks-rule); border-radius: var(--dsw-radius-sm, 8px);
+  background: var(--dsh-tasks-paper); cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease;
+}
+.dsh-tasks-column-manager .dsh-tasks-manage-create .dsh-tasks-col-color-trigger {
+  width: var(--dsh-tasks-add-column-control, 36px); height: var(--dsh-tasks-add-column-control, 36px);
+}
+.dsh-tasks-col-color-trigger:not([aria-disabled=true]):hover,
+.dsh-tasks-col-color-picker[open] > .dsh-tasks-col-color-trigger {
+  border-color: var(--dsh-tasks-focus);
+  background: color-mix(in srgb, var(--dsh-tasks-focus) 6%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-col-color-trigger[aria-disabled=true] { opacity: .55; cursor: default; }
+.dsh-tasks-col-color-dot {
+  box-sizing: border-box; width: 18px; height: 18px; border-radius: 50%; forced-color-adjust: none;
+  background: color-mix(in srgb, var(--dsh-tasks-swatch) 48%, var(--dsh-tasks-paper));
+  border: 1.5px dashed color-mix(in srgb, var(--dsh-tasks-swatch) 85%, var(--dsh-tasks-ink));
+}
+.dsh-tasks-col-color-trigger[data-custom] .dsh-tasks-col-color-dot {
+  background: var(--dsh-tasks-swatch);
+  border: 1.5px solid color-mix(in srgb, var(--dsh-tasks-ink) 22%, transparent);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 22%);
+}
+.dsh-tasks-root .dsh-tasks-menu.dsh-tasks-col-color-menu { width: 228px; padding: 10px; }
+.dsh-tasks-root .dsh-tasks-menu.dsh-tasks-col-color-menu:popover-open { display: grid; gap: 10px; }
+.dsh-tasks-col-color-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dsh-tasks-col-color-head .dsh-tasks-menu-label { padding: 0; font-size: 11px; color: var(--dsh-tasks-muted); }
+.dsh-tasks-root .dsh-tasks-menu.dsh-tasks-col-color-menu button.dsh-tasks-col-color-reset {
+  width: auto; min-height: 24px; padding: 2px 8px; border-radius: 6px;
+  border: 1px solid var(--dsh-tasks-rule); background: transparent;
+  color: var(--dsh-tasks-muted); font-size: 11px; line-height: 1.4;
+}
+.dsh-tasks-root .dsh-tasks-menu.dsh-tasks-col-color-menu button.dsh-tasks-col-color-reset:not(:disabled):hover {
+  border-color: var(--dsh-tasks-focus); color: var(--dsh-tasks-ink);
+  background: color-mix(in srgb, var(--dsh-tasks-focus) 9%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-root .dsh-tasks-menu.dsh-tasks-col-color-menu button.dsh-tasks-col-color-reset[aria-pressed=true] {
+  opacity: 1; border-color: var(--dsh-tasks-focus); color: var(--dsh-tasks-focus);
+  background: color-mix(in srgb, var(--dsh-tasks-focus) 10%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-col-color-swatches { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; justify-items: center; }
+.dsh-tasks-root .dsh-tasks-menu.dsh-tasks-col-color-menu .dsh-tasks-col-color-swatches button.dsh-tasks-col-color-swatch {
+  box-sizing: border-box; display: inline-grid; place-items: center;
+  width: 28px; height: 28px; padding: 0; border-radius: 50%; forced-color-adjust: none;
+  background: var(--dsh-tasks-swatch);
+  border: 2px solid color-mix(in srgb, var(--dsh-tasks-ink) 16%, transparent);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 24%);
+  transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+}
+.dsh-tasks-root .dsh-tasks-menu.dsh-tasks-col-color-menu .dsh-tasks-col-color-swatches button.dsh-tasks-col-color-swatch:hover:not(:disabled) {
+  background: var(--dsh-tasks-swatch); transform: scale(1.08); border-color: var(--dsh-tasks-ink);
+}
+.dsh-tasks-root .dsh-tasks-menu.dsh-tasks-col-color-menu .dsh-tasks-col-color-swatches button.dsh-tasks-col-color-swatch[aria-pressed=true] {
+  background: var(--dsh-tasks-swatch); border-color: var(--dsh-tasks-ink);
+  box-shadow: 0 0 0 2px var(--dsh-tasks-paper), 0 0 0 4px var(--dsh-tasks-focus);
+}
+.dsh-tasks-col-color-custom { display: flex; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px dashed var(--dsh-tasks-rule); }
+.dsh-tasks-col-color-custom .dsh-tasks-swatch-field { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--dsh-tasks-muted); cursor: pointer; }
+.dsh-tasks-col-color-custom .dsh-tasks-swatch-field input { width: 26px; height: 26px; padding: 3px; border-radius: 6px; }
+.dsh-tasks-col-color-hex { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--dsh-tasks-muted); margin-inline-end: auto; }
+.dsh-tasks-root .dsh-tasks-menu.dsh-tasks-col-color-menu button.dsh-tasks-col-color-apply {
+  width: auto; min-height: 26px; padding: 2px 9px; font-size: 11px;
+  border: 1px solid var(--dsh-tasks-line); border-radius: 6px; background: var(--dsh-tasks-paper); color: var(--dsh-tasks-ink);
+}
+.dsh-tasks-root .dsh-tasks-menu.dsh-tasks-col-color-menu button.dsh-tasks-col-color-apply:hover:not(:disabled) {
+  border-color: var(--dsh-tasks-focus); background: color-mix(in srgb, var(--dsh-tasks-focus) 10%, var(--dsh-tasks-paper));
+}
+@media (pointer: coarse) {
+  .dsh-tasks-col-color-trigger { width: 44px; height: 44px; }
+  .dsh-tasks-root .dsh-tasks-menu.dsh-tasks-col-color-menu .dsh-tasks-col-color-swatches button.dsh-tasks-col-color-swatch { width: 38px; height: 38px; }
+  .dsh-tasks-root .dsh-tasks-menu.dsh-tasks-col-color-menu button:is(.dsh-tasks-col-color-reset, .dsh-tasks-col-color-apply) { min-height: 36px; }
+}
 .dsh-tasks-swatch-field input { appearance: none; box-sizing: border-box; width: 36px; height: 36px; padding: 6px; border: 1px solid var(--dsh-tasks-line); border-radius: 8px; background: var(--dsh-tasks-paper); cursor: pointer; }
 .dsh-tasks-swatch-field input::-webkit-color-swatch-wrapper { padding: 0; }
 .dsh-tasks-swatch-field input::-webkit-color-swatch { border: 0; border-radius: 50%; }
 .dsh-tasks-empty-labels { display: flex; align-items: center; gap: 12px; padding: 16px; border-block: 1px solid var(--dsh-tasks-rule); color: var(--dsh-tasks-muted); }
 .dsh-tasks-empty-labels strong { color: var(--dsh-tasks-ink); } .dsh-tasks-empty-labels p { margin: 3px 0 0; }
 .dsh-tasks-card-buttons { display: flex; gap: 8px; margin-top: 10px; }
+.dsh-tasks-board .dsh-tasks-card-title > .dsh-tasks-card-title-text {
+  display: -webkit-box; min-width: 0; overflow: hidden; overflow-wrap: anywhere; white-space: normal;
+  text-align: start; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.55;
+}
+.dsh-tasks-card-blockers {
+  display: flex; align-items: center; gap: 5px; flex-wrap: nowrap; min-width: 0; margin-top: 7px; padding: 3px 7px; border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary, #b45309)) 22%, var(--dsh-tasks-line));
+  background: color-mix(in srgb, var(--dsh-paper-warningSoft, var(--dsw-alias-state-warn-tertiary, #fef3c7)) 55%, var(--dsh-tasks-paper));
+  color: color-mix(in srgb, var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary, #92400e)) 85%, var(--dsh-tasks-muted));
+  font-size: 11px; line-height: 1.4;
+}
+.dsh-tasks-card-blockers > .dsh-tasks-icon { flex: none; color: var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary, #b45309)); opacity: .85; }
+.dsh-tasks-card-blockers .dsh-tasks-blocker-more { flex: none; font-variant-numeric: tabular-nums; opacity: .8; }
+.dsh-tasks-root button.dsh-tasks-dependency-link { justify-content: flex-start; max-width: 100%; min-height: 20px; padding: 0 2px; border: 0; box-shadow: none; background: transparent; font: inherit; color: var(--dsh-tasks-focus); text-align: start; text-decoration: underline; text-underline-offset: 2px; }
+.dsh-tasks-root button.dsh-tasks-dependency-link:hover { color: var(--dsh-tasks-ink); }
+.dsh-tasks-root .dsh-tasks-card-blockers button.dsh-tasks-dependency-link {
+  display: inline-flex; align-items: center; flex: 0 1 auto; min-width: 0; max-width: 100%; min-height: 18px; height: auto;
+  padding: 0; border: 0; box-shadow: none; background: transparent; color: inherit; font: inherit; text-align: start; text-decoration: none; overflow: hidden;
+}
+.dsh-tasks-card-blockers .dsh-tasks-dependency-title { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-tasks-root .dsh-tasks-card-blockers button.dsh-tasks-dependency-link:is(:hover, :focus-visible) {
+  color: var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary, var(--dsh-tasks-ink))); text-decoration: underline; text-underline-offset: 2px;
+}
+.dsh-tasks-card-blockers button.dsh-tasks-dependency-link + button.dsh-tasks-dependency-link::before { content: '·'; margin-inline-end: 5px; opacity: .55; flex: none; }
+.dsh-tasks-prerequisites, .dsh-tasks-dependents { display: grid; gap: 6px; min-width: 0; }
+.dsh-tasks-prerequisites ul, .dsh-tasks-dependents ul, .dsh-tasks-attention-list ul, .dsh-tasks-evidence-links { list-style: none; margin: 0; padding: 0; }
+.dsh-tasks-prerequisites li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; font-size: 13px; overflow-wrap: anywhere; }
+.dsh-tasks-dependents li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 13px; overflow-wrap: anywhere; }
+.dsh-tasks-prerequisites li > small, .dsh-tasks-dependents li > small { color: var(--dsh-tasks-muted); font-size: 12px; white-space: nowrap; }
+.dsh-tasks-dependents-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dsh-tasks-dependents-badge {
+  display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px;
+  font-size: 11px; font-weight: 550; font-variant-numeric: tabular-nums;
+  color: var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary));
+  background: color-mix(in srgb, var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary)) 10%, var(--dsh-tasks-paper));
+  border: 1px solid color-mix(in srgb, var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary)) 26%, transparent);
+}
+.dsh-tasks-dependency-chooser { display: grid; gap: 6px; }
+.dsh-tasks-ready-filter { margin-top: 8px; }
+.dsh-tasks-ready-filter[aria-pressed=true] { color: var(--dsh-tasks-focus); border-color: var(--dsh-tasks-focus); }
+.dsh-tasks-board-view:has(> :is(.dsh-tasks-attention, .dsh-tasks-active-filters)) { --dsh-tasks-board-top: 14px; }
+.dsh-tasks-root.dsh-tasks-board-view > .dsh-tasks-attention {
+  --attention-tone: var(--dsh-tasks-focus);
+  flex: none; min-width: 0; margin: 12px var(--dsh-tasks-panel-gutter) 0; padding: 0; overflow: hidden;
+  background: color-mix(in srgb, var(--attention-tone) 6%, var(--dsh-tasks-paper));
+  border: 1px solid color-mix(in srgb, var(--attention-tone) 26%, var(--dsh-tasks-rule));
+  border-radius: var(--dsw-radius-md, 10px);
+  color: var(--dsh-tasks-ink);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--dsh-tasks-shadow) 32%, transparent);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.dsh-tasks-root.dsh-tasks-board-view > .dsh-tasks-attention[data-attention-tone="warn"] {
+  --attention-tone: var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary));
+}
+.dsh-tasks-root.dsh-tasks-board-view > .dsh-tasks-attention[data-attention-tone="danger"] {
+  --attention-tone: var(--dsh-paper-danger, var(--dsw-alias-state-error-primary));
+}
+.dsh-tasks-root.dsh-tasks-board-view > .dsh-tasks-attention[open] {
+  border-color: color-mix(in srgb, var(--attention-tone) 38%, var(--dsh-tasks-rule));
+  box-shadow: 0 4px 12px -4px color-mix(in srgb, var(--dsh-tasks-shadow) 55%, transparent);
+}
+.dsh-tasks-attention > .dsh-tasks-attention-summary {
+  display: flex; flex-wrap: nowrap; align-items: center; gap: 8px 10px;
+  min-height: 40px; box-sizing: border-box; padding: 7px 12px;
+  list-style: none; cursor: pointer; user-select: none;
+  transition: background-color .15s ease;
+}
+.dsh-tasks-attention > .dsh-tasks-attention-summary:hover {
+  background: color-mix(in srgb, var(--attention-tone) 6%, transparent);
+}
+.dsh-tasks-attention-summary::-webkit-details-marker { display: none; }
+.dsh-tasks-attention-badge {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 24px; height: 24px; border-radius: var(--dsw-radius-xs, 6px);
+  background: color-mix(in srgb, var(--attention-tone) 14%, var(--dsh-tasks-paper));
+  color: var(--attention-tone);
+}
+.dsh-tasks-attention-summary > strong {
+  flex: none; font-size: 13px; font-weight: 650;
+  font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--dsh-tasks-ink);
+}
+.dsh-tasks-attention [data-reason] { --pill-tone: var(--dsh-tasks-focus); }
+.dsh-tasks-attention :is([data-reason="approval"], [data-reason="question"], [data-reason="reviewReturned"]) {
+  --pill-tone: var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary));
+}
+.dsh-tasks-attention [data-reason="error"] {
+  --pill-tone: var(--dsh-paper-danger, var(--dsw-alias-state-error-primary));
+}
+.dsh-tasks-delivery-section h3 > .dsh-tasks-icon { color: var(--dsh-tasks-focus); }
+.dsh-tasks-attention-counts, .dsh-tasks-delivery-actions, .dsh-tasks-delivery-meta, .dsh-tasks-run-status { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.dsh-tasks-attention-counts { flex: none; }
+.dsh-tasks-attention-counts > small { display: inline-flex; font: inherit; }
+.dsh-tasks-root .dsh-tasks-attention-counts button.dsh-tasks-attention-pill {
+  box-sizing: border-box; display: inline-flex; align-items: center; gap: 5px;
+  min-height: 22px; height: auto; padding: 2px 8px; border-radius: 999px;
+  font: inherit; font-size: 11px; font-weight: 550; line-height: 16px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  color: var(--pill-tone);
+  background: color-mix(in srgb, var(--pill-tone) 11%, var(--dsh-tasks-paper));
+  border: 1px solid color-mix(in srgb, var(--pill-tone) 26%, transparent);
+  box-shadow: none; cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+.dsh-tasks-root .dsh-tasks-attention-counts button.dsh-tasks-attention-pill:is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--pill-tone) 17%, var(--dsh-tasks-paper));
+  border-color: color-mix(in srgb, var(--pill-tone) 48%, transparent);
+}
+.dsh-tasks-root .dsh-tasks-attention-counts button.dsh-tasks-attention-pill[data-active] {
+  background: color-mix(in srgb, var(--pill-tone) 22%, var(--dsh-tasks-paper));
+  border-color: var(--pill-tone);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pill-tone) 28%, transparent);
+  font-weight: 650;
+}
+.dsh-tasks-root .dsh-tasks-attention-counts button.dsh-tasks-attention-pill::before {
+  content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: none;
+}
+.dsh-tasks-root button.dsh-tasks-attention-show-all {
+  margin-inline-start: auto; box-sizing: border-box; min-height: 20px; height: auto; padding: 1px 8px;
+  border-radius: 999px; border: 1px solid color-mix(in srgb, var(--attention-tone) 28%, var(--dsh-tasks-rule));
+  background: var(--dsh-tasks-paper); color: var(--dsh-tasks-focus);
+  font: inherit; font-size: 11px; font-weight: 550; box-shadow: none; cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease;
+}
+.dsh-tasks-root button.dsh-tasks-attention-show-all:is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--dsh-tasks-focus) 10%, var(--dsh-tasks-paper));
+  border-color: var(--dsh-tasks-focus);
+}
+.dsh-tasks-attention-preview {
+  display: flex; align-items: center; gap: 6px; flex: 1 1 140px; min-width: 0;
+  padding-inline-start: 10px;
+  border-inline-start: 1px solid color-mix(in srgb, var(--attention-tone) 20%, var(--dsh-tasks-rule));
+  color: var(--dsh-tasks-muted); font-size: 12px;
+}
+.dsh-tasks-attention-preview > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-tasks-attention-preview-more { flex: none; font-size: 11px; opacity: .82; font-variant-numeric: tabular-nums; }
+.dsh-tasks-attention[open] .dsh-tasks-attention-preview { display: none; }
+.dsh-tasks-attention-toggle {
+  margin-inline-start: auto; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: var(--dsw-radius-xs, 6px);
+  color: var(--dsh-tasks-muted);
+  transition: transform .18s ease, background-color .15s ease, color .15s ease;
+}
+.dsh-tasks-attention-summary:hover .dsh-tasks-attention-toggle {
+  color: var(--dsh-tasks-ink);
+  background: color-mix(in srgb, var(--attention-tone) 12%, transparent);
+}
+.dsh-tasks-attention[open] > .dsh-tasks-attention-summary .dsh-tasks-attention-toggle {
+  transform: rotate(180deg); color: var(--attention-tone);
+}
+.dsh-tasks-attention-list {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 10px 14px; max-height: 32vh; overflow: auto; padding: 10px 12px 12px;
+  border-top: 1px dashed color-mix(in srgb, var(--attention-tone) 24%, var(--dsh-tasks-rule));
+  background: color-mix(in srgb, var(--dsh-tasks-paper) 55%, transparent);
+}
+.dsh-tasks-attention-list section { min-width: 0; }
+.dsh-tasks-attention-group-head {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
+  color: var(--pill-tone); font-size: 11px;
+}
+.dsh-tasks-attention-group-head strong { color: inherit; font-size: 11px; font-weight: 650; }
+.dsh-tasks-attention-group-head small {
+  padding: 0 5px; border-radius: 999px;
+  background: color-mix(in srgb, var(--pill-tone) 12%, var(--dsh-tasks-paper));
+  color: var(--pill-tone); font-size: 10px; font-weight: 600; line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.dsh-tasks-attention-list ul { display: grid; gap: 5px; }
+.dsh-tasks-root button.dsh-tasks-attention-item {
+  display: flex; align-items: center; width: 100%; min-width: 0; min-height: 36px; height: auto;
+  box-sizing: border-box; gap: 8px; padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--dsh-tasks-line) 55%, transparent);
+  border-radius: var(--dsw-radius-sm, 8px);
+  background: var(--dsh-tasks-paper); color: var(--dsh-tasks-ink);
+  font-size: 12.5px; text-align: start; box-shadow: none; cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease;
+}
+.dsh-tasks-root button.dsh-tasks-attention-item:is(:hover, :focus-visible) {
+  border-color: color-mix(in srgb, var(--pill-tone) 55%, var(--dsh-tasks-line));
+  background: color-mix(in srgb, var(--pill-tone) 7%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-attention-item-title {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550;
+}
+.dsh-tasks-attention-item-meta {
+  display: inline-flex; align-items: center; gap: 8px; flex: none; margin-inline-start: auto; max-width: 48%;
+}
+.dsh-tasks-attention-item-ws {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 130px;
+  font-size: 11px; color: var(--dsh-tasks-muted);
+}
+.dsh-tasks-attention-item-ws > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-tasks-attention-item-action {
+  display: inline-flex; align-items: center; gap: 2px; flex: none;
+  font-size: 11px; font-weight: 600; color: var(--pill-tone); white-space: nowrap;
+  transition: transform .15s ease;
+}
+.dsh-tasks-root button.dsh-tasks-attention-item:hover .dsh-tasks-attention-item-action { transform: translateX(1px); }
+@container task-panel (max-width: 680px) {
+  .dsh-tasks-attention > .dsh-tasks-attention-summary { flex-wrap: wrap; }
+  .dsh-tasks-attention-preview { display: none; }
+}
+@container task-panel (max-width: 520px) {
+  .dsh-tasks-attention-item-ws { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dsh-tasks-attention, .dsh-tasks-attention-summary, .dsh-tasks-attention-toggle,
+  .dsh-tasks-root button.dsh-tasks-attention-item, .dsh-tasks-attention-item-action,
+  .dsh-tasks-root .dsh-tasks-attention-counts button.dsh-tasks-attention-pill,
+  .dsh-tasks-root button.dsh-tasks-attention-show-all,
+  .dsh-tasks-unlock-toast { transition: none; }
+}
+.dsh-tasks-workspace { position: relative; }
+.dsh-tasks-workspace[data-overlay-insights] > .dsh-tasks-insights { display: flex; position: absolute; z-index: 5; inset-block-start: 0; inset-inline-start: 0; width: min(420px, calc(100% - 2 * var(--dsh-tasks-panel-gutter))); box-shadow: 0 8px 24px var(--dsh-tasks-shadow); }
+.dsh-tasks-launch-criteria { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--dsh-tasks-rule); border-radius: 10px; background: color-mix(in srgb, var(--dsh-tasks-focus) 4%, var(--dsh-tasks-paper)); }
+.dsh-tasks-delivery-section { display: grid; gap: 12px; margin: 4px 0 12px; overflow-wrap: anywhere; }
+.dsh-tasks-delivery-section :is(h3,h4,p), .dsh-tasks-launch-criteria :is(p,small) { margin: 0; }
+.dsh-tasks-delivery-section h3, .dsh-tasks-evidence-links a { display: flex; align-items: center; gap: 6px; }
+.dsh-tasks-evidence-links a { width: fit-content; color: var(--dsh-tasks-focus); }
+.dsh-tasks-evidence-item p, .dsh-tasks-launch-criteria p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.dsh-tasks-launch-criteria summary { cursor: pointer; }
+.dsh-tasks-delivery-meta time, .dsh-tasks-delivery-section small, .dsh-tasks-launch-criteria small { color: var(--dsh-tasks-muted); }
+.dsh-tasks-delivery-actions { justify-content: flex-end; }
+.dsh-tasks-review-input { display: grid; gap: 5px; }
+@media (pointer: coarse) { .dsh-tasks-root :is(button.dsh-tasks-dependency-link, button.dsh-tasks-attention-item), .dsh-tasks-root .dsh-tasks-card-blockers button.dsh-tasks-dependency-link, .dsh-tasks-attention-summary { min-height: 44px; } }
 .dsh-tasks-root .dsh-tasks-board .dsh-tasks-card[data-task-id] {
-  min-width: 0; padding: 10px 11px; margin-bottom: 10px;
+  min-width: 0; padding: 12px 13px; margin-bottom: 10px; border-radius: 10px;
+  & .dsh-tasks-card-heading { position: relative; gap: 6px; }
+  & .dsh-tasks-card-heading > .dsh-tasks-grip {
+    position: absolute; inset-inline-start: -12px; top: 2px; width: 12px; min-width: 12px; height: 22px; min-height: 22px;
+    padding: 0; display: inline-flex; align-items: center; justify-content: center;
+    color: var(--dsh-tasks-muted); opacity: 0; pointer-events: none; transition: opacity .15s ease, color .15s ease;
+  }
+  &:is(:hover, :focus-within, [data-dragging]) .dsh-tasks-card-heading > .dsh-tasks-grip,
+  & .dsh-tasks-card-heading > .dsh-tasks-grip:focus-visible { opacity: .72; pointer-events: auto; }
+  & .dsh-tasks-card-heading > .dsh-tasks-grip:is(:hover, :focus-visible) { opacity: 1; color: var(--dsh-tasks-focus); }
+  @media (hover: none), (pointer: coarse) {
+    & .dsh-tasks-card-heading > .dsh-tasks-grip {
+      position: static; width: 28px; min-width: 28px; min-height: 44px; margin-inline-start: -6px; opacity: .55; pointer-events: auto;
+    }
+  }
   & .dsh-tasks-card-brief { margin: 4px 0 0; line-height: 1.5; }
+  &[data-stage="done"] .dsh-tasks-card-brief { -webkit-line-clamp: 1; opacity: .82; }
+  &[data-stage="done"] :is(.dsh-tasks-card-properties, .dsh-tasks-card-footer) { opacity: .84; }
   & .dsh-tasks-card-properties { flex-wrap: wrap; gap: 4px 6px; margin-top: 6px; }
   & .dsh-tasks-card-properties > * { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-  & .dsh-tasks-card-due { display: inline-flex; align-items: center; gap: 4px; white-space: normal; overflow-wrap: anywhere; }
+  & .dsh-tasks-card-properties > :is(.dsh-tasks-priority-tag, .dsh-tasks-label-tag, :has(> [data-priority]), :has(> [data-label-chip])) {
+    box-sizing: border-box; display: inline-flex; align-items: center; height: 20px; min-height: 20px; padding: 0 6px;
+    border-radius: 5px; font-size: 11px; line-height: 18px; font-weight: 500;
+    border: 1px solid color-mix(in srgb, var(--dsh-tasks-line) 72%, transparent);
+    background: color-mix(in srgb, var(--dsh-tasks-muted) 8%, var(--dsh-tasks-paper));
+    color: var(--dsh-tasks-muted);
+  }
+  & .dsh-tasks-card-properties > :is([data-priority="P0" i], :has(> [data-priority="P0" i])) {
+    color: var(--dsh-paper-danger, var(--dsw-alias-state-error-primary, #ba3548));
+    background: var(--dsh-paper-dangerSoft, color-mix(in srgb, var(--dsw-alias-state-error-primary, #ba3548) 10%, var(--dsh-tasks-paper)));
+    border-color: color-mix(in srgb, var(--dsh-paper-danger, var(--dsw-alias-state-error-primary, #ba3548)) 32%, transparent);
+    font-weight: 600;
+  }
+  & .dsh-tasks-card-properties > :is([data-priority="P1" i], :has(> [data-priority="P1" i])) {
+    color: var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary, #865a05));
+    background: var(--dsh-paper-warningSoft, color-mix(in srgb, var(--dsw-alias-state-warn-primary, #865a05) 12%, var(--dsh-tasks-paper)));
+    border-color: color-mix(in srgb, var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary, #865a05)) 32%, transparent);
+    font-weight: 600;
+  }
+  & .dsh-tasks-card-properties > :is([data-priority="P2" i], :has(> [data-priority="P2" i])) {
+    color: var(--dsh-paper-info, var(--dsw-alias-state-business-primary, #176da0));
+    background: var(--dsh-paper-infoSoft, color-mix(in srgb, var(--dsw-alias-state-business-primary, #176da0) 10%, var(--dsh-tasks-paper)));
+    border-color: color-mix(in srgb, var(--dsh-paper-info, var(--dsw-alias-state-business-primary, #176da0)) 28%, transparent);
+    font-weight: 500;
+  }
+  & .dsh-tasks-card-due { display: inline-flex; align-items: center; gap: 4px; min-height: 20px; font-size: 11px; line-height: 18px; white-space: normal; overflow-wrap: anywhere; }
   & .dsh-tasks-card-due[data-overdue] { color: var(--dsh-paper-danger, var(--dsw-alias-state-error-primary)); }
-  & .dsh-tasks-card-context { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 6px; }
+  & .dsh-tasks-card-footer {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 8px;
+    margin-top: 9px; padding-top: 8px; border-top: 1px dashed color-mix(in srgb, var(--dsh-tasks-line) 48%, transparent);
+  }
+  &[data-stage="done"] .dsh-tasks-card-footer { border-top-color: color-mix(in srgb, var(--dsh-tasks-line) 32%, transparent); }
+  & .dsh-tasks-card-context { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; flex: 1 1 130px; min-width: 0; margin-top: 0; }
   & .dsh-tasks-card-state { margin: 0; max-width: 100%; overflow-wrap: anywhere; }
-  & .dsh-tasks-card-context > .dsh-tasks-card-meta { flex: 1 1 98px; }
+  & .dsh-tasks-card-context > .dsh-tasks-card-meta { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+  & .dsh-tasks-card-counts { display: inline-flex; align-items: center; gap: 6px; flex: none; color: var(--dsh-tasks-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  & .dsh-tasks-meta-count { display: inline-flex; align-items: center; gap: 3px; line-height: 1; color: var(--dsh-tasks-muted); }
+  & .dsh-tasks-meta-count > .dsh-tasks-icon { opacity: .78; }
   & .dsh-tasks-card-meta { min-width: 0; padding-top: 0; font-family: inherit; }
   & .dsh-tasks-status-time { display: none; }
-  & .dsh-tasks-card-buttons { flex-wrap: wrap; gap: 5px; margin-top: 7px; border: 0; padding: 0; }
+  & .dsh-tasks-card-buttons { display: flex; justify-content: flex-end; align-items: center; flex: 0 0 auto; flex-wrap: wrap; gap: 5px; margin-top: 0; margin-inline-start: auto; border: 0 !important; padding: 0 !important; }
   & .dsh-tasks-card-buttons button { min-width: 0; max-width: 100%; height: auto; white-space: normal; }
+  & .dsh-tasks-card-buttons button.dsh-tasks-card-action-btn {
+    min-height: 24px;
+    height: auto;
+    padding: 0 9px;
+    font-size: 11px;
+    font-weight: 550;
+    line-height: 22px;
+    border-radius: 5px;
+    box-shadow: none;
+    border-color: color-mix(in srgb, var(--dsh-tasks-focus) 42%, var(--dsh-tasks-line));
+    background: color-mix(in srgb, var(--dsh-tasks-focus) 10%, var(--dsh-tasks-paper));
+    color: var(--dsh-tasks-focus);
+    transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+  }
+  & .dsh-tasks-card-buttons button.dsh-tasks-card-action-btn[data-action-tone="promote"]:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--dsh-tasks-focus) 18%, var(--dsh-tasks-paper));
+    border-color: var(--dsh-tasks-focus);
+  }
+  & .dsh-tasks-card-buttons button.dsh-tasks-card-action-btn[data-action-tone="neutral"] {
+    border-color: color-mix(in srgb, var(--dsh-tasks-line) 78%, transparent);
+    background: transparent;
+    color: var(--dsh-tasks-muted);
+    font-weight: 500;
+  }
+  & .dsh-tasks-card-buttons button.dsh-tasks-card-action-btn[data-action-tone="neutral"]:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--dsh-tasks-muted) 10%, var(--dsh-tasks-paper));
+    border-color: var(--dsh-tasks-line);
+    color: var(--dsh-tasks-ink);
+  }
   & :is(.dsh-tasks-card-properties, .dsh-tasks-card-buttons):empty { display: none; }
-  @media (pointer: coarse) { & .dsh-tasks-card-buttons button { min-height: 44px; } }
+  @media (pointer: coarse) { & .dsh-tasks-card-buttons button.dsh-tasks-card-action-btn { min-height: 44px; padding: 0 12px; } }
+}
+body .dsh-tasks-root .dsh-tasks-card-state[data-task-status] > span.dsh-tasks-status-label[data-status-tone] {
+  --status-tone: var(--dsh-tasks-muted);
+  --status-dot-tone: currentColor;
+  --status-bg: color-mix(in srgb, var(--dsh-tasks-muted) 7%, var(--dsh-tasks-paper));
+  --status-border: color-mix(in srgb, var(--dsh-tasks-line) 62%, transparent);
+  display: inline-flex; align-items: center; gap: 5px; box-sizing: border-box;
+  min-height: 20px; padding: 1px 7px; border: 1px solid var(--status-border); border-radius: 999px;
+  background: var(--status-bg); color: var(--status-tone);
+  font-size: 11px; font-weight: 500; line-height: 16px; white-space: nowrap;
+}
+body .dsh-tasks-root .dsh-tasks-card-state[data-task-status] > span.dsh-tasks-status-label[data-status-tone] > .dsh-tasks-dot {
+  box-sizing: border-box; width: 6px; height: 6px; border-radius: 50%; flex: none;
+  border: 0; background: var(--status-dot-tone);
+}
+body .dsh-tasks-root .dsh-tasks-card-state[data-task-status] > span.dsh-tasks-status-label[data-status-tone="muted"] > .dsh-tasks-dot {
+  border: 1.5px solid color-mix(in srgb, currentColor 72%, transparent); background: transparent;
+}
+body .dsh-tasks-root .dsh-tasks-card-state[data-task-status] > span.dsh-tasks-status-label[data-status-tone="ready"] {
+  --status-dot-tone: var(--dsh-paper-success, var(--dsh-ios-success, var(--dsw-alias-state-success-primary)));
+  --status-tone: color-mix(in srgb, var(--status-dot-tone) 78%, var(--dsh-tasks-ink));
+  --status-bg: color-mix(in srgb, var(--status-dot-tone) 7%, var(--dsh-tasks-paper));
+  --status-border: color-mix(in srgb, var(--status-dot-tone) 22%, transparent);
+}
+body .dsh-tasks-root .dsh-tasks-card-state[data-task-status] > span.dsh-tasks-status-label[data-status-tone="success"] {
+  --status-tone: var(--dsh-paper-success, var(--dsh-ios-success, var(--dsw-alias-state-success-primary)));
+  --status-bg: color-mix(in srgb, var(--status-tone) 10%, var(--dsh-tasks-paper));
+  --status-border: color-mix(in srgb, var(--status-tone) 28%, transparent);
+  font-weight: 550;
+}
+body .dsh-tasks-root .dsh-tasks-card-state[data-task-status] > span.dsh-tasks-status-label[data-status-tone="info"] {
+  --status-tone: var(--dsh-paper-info, var(--dsh-ios-info, var(--dsw-alias-state-business-primary)));
+  --status-bg: color-mix(in srgb, var(--status-tone) 11%, var(--dsh-tasks-paper));
+  --status-border: color-mix(in srgb, var(--status-tone) 28%, transparent);
+  font-weight: 550;
+}
+body .dsh-tasks-root .dsh-tasks-card-state[data-task-status] > span.dsh-tasks-status-label[data-status-tone="action"] {
+  --status-tone: var(--dsh-tasks-focus);
+  --status-bg: color-mix(in srgb, var(--status-tone) 12%, var(--dsh-tasks-paper));
+  --status-border: color-mix(in srgb, var(--status-tone) 32%, transparent);
+  font-weight: 600;
+}
+body .dsh-tasks-root .dsh-tasks-card-state[data-task-status] > span.dsh-tasks-status-label[data-status-tone="blocked"] {
+  --status-tone: var(--dsh-paper-warning, var(--dsh-ios-warning, var(--dsw-alias-state-warn-primary)));
+  --status-bg: color-mix(in srgb, var(--status-tone) 9%, var(--dsh-tasks-paper));
+  --status-border: color-mix(in srgb, var(--status-tone) 26%, transparent);
+  font-weight: 550;
+}
+body .dsh-tasks-root .dsh-tasks-card-state[data-task-status] > span.dsh-tasks-status-label[data-status-tone="warn"] {
+  --status-tone: var(--dsh-paper-warning, var(--dsh-ios-warning, var(--dsw-alias-state-warn-primary)));
+  --status-bg: color-mix(in srgb, var(--status-tone) 13%, var(--dsh-tasks-paper));
+  --status-border: color-mix(in srgb, var(--status-tone) 34%, transparent);
+  font-weight: 600;
+}
+body .dsh-tasks-root .dsh-tasks-card-state[data-task-status] > span.dsh-tasks-status-label[data-status-tone="danger"] {
+  --status-tone: var(--dsh-paper-danger, var(--dsh-ios-danger, var(--dsw-alias-state-error-primary)));
+  --status-bg: color-mix(in srgb, var(--status-tone) 13%, var(--dsh-tasks-paper));
+  --status-border: color-mix(in srgb, var(--status-tone) 34%, transparent);
+  font-weight: 600;
+}
+body .dsh-tasks-root .dsh-tasks-editor-drawer .dsh-tasks-card-state[data-task-status] > span.dsh-tasks-status-label[data-status-tone]:has(> [data-task-ink-ready]) {
+  border-color: transparent;
+}
+body .dsh-tasks-root .dsh-tasks-board .dsh-tasks-card[data-task-id][data-card-tone] {
+  --card-accent: var(--dsh-tasks-focus);
+  border-color: color-mix(in srgb, var(--card-accent) 34%, var(--dsh-tasks-line));
+}
+body .dsh-tasks-root .dsh-tasks-board .dsh-tasks-card[data-task-id][data-card-tone]::before {
+  content: ''; position: absolute; inset-block: 8px; inset-inline-start: 0; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--card-accent); pointer-events: none;
+}
+body .dsh-tasks-root .dsh-tasks-board .dsh-tasks-card[data-task-id][data-card-tone="danger"] {
+  --card-accent: var(--dsh-paper-danger, var(--dsh-ios-danger, var(--dsw-alias-state-error-primary)));
+}
+body .dsh-tasks-root .dsh-tasks-board .dsh-tasks-card[data-task-id][data-card-tone="warn"] {
+  --card-accent: var(--dsh-paper-warning, var(--dsh-ios-warning, var(--dsw-alias-state-warn-primary)));
+}
+body .dsh-tasks-root .dsh-tasks-board .dsh-tasks-card[data-task-id][data-card-tone="action"] {
+  --card-accent: var(--dsh-tasks-focus);
+}
+body .dsh-tasks-root .dsh-tasks-board .dsh-tasks-card[data-task-id][data-card-tone="blocked"] {
+  --card-accent: color-mix(in srgb, var(--dsh-paper-warning, var(--dsh-ios-warning, var(--dsw-alias-state-warn-primary))) 72%, var(--dsh-tasks-line));
+  border-color: color-mix(in srgb, var(--card-accent) 24%, var(--dsh-tasks-line));
+}
+body .dsh-tasks-root .dsh-tasks-board .dsh-tasks-card[data-task-id][data-card-tone]:not([data-card-tone="blocked"]) {
+  background-color: color-mix(in srgb, var(--card-accent) 4%, var(--dsh-paper-card, var(--dsh-tasks-paper)));
+}
+body .dsh-tasks-root .dsh-tasks-board .dsh-tasks-card[data-task-id][data-card-tone]:hover {
+  border-color: color-mix(in srgb, var(--card-accent) 56%, var(--dsh-tasks-line));
+}
+body .dsh-tasks-root .dsh-tasks-board .dsh-tasks-card[data-task-id][data-card-tone="blocked"]:hover {
+  border-color: color-mix(in srgb, var(--card-accent) 40%, var(--dsh-tasks-line));
+}
+@media (forced-colors: active) {
+  body .dsh-tasks-root .dsh-tasks-card-state[data-task-status] > span.dsh-tasks-status-label[data-status-tone] {
+    background: Canvas; color: CanvasText; border-color: CanvasText;
+  }
+  body .dsh-tasks-root .dsh-tasks-card-state[data-task-status] > span.dsh-tasks-status-label[data-status-tone] > .dsh-tasks-dot {
+    background: CanvasText; border-color: CanvasText;
+  }
+  body .dsh-tasks-root .dsh-tasks-board .dsh-tasks-card[data-task-id][data-card-tone]::before {
+    background: Highlight;
+  }
+  .dsh-tasks-root .dsh-tasks-attention-counts button.dsh-tasks-attention-pill {
+    background: Canvas; color: CanvasText; border-color: CanvasText;
+  }
+  .dsh-tasks-root .dsh-tasks-attention-counts button.dsh-tasks-attention-pill[data-active] {
+    border-color: Highlight; outline: 1px solid Highlight;
+  }
+  .dsh-tasks-unlock-toast {
+    background: Canvas; color: CanvasText; border-color: CanvasText;
+  }
+}
+.dsh-tasks-colfoot[data-has-range] .dsh-tasks-quick-create {
+  flex: 1 0 100%; width: 100%;
+}
+.dsh-tasks-quick-create {
+  display: grid; gap: 7px; padding: 8px; box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--dsh-tasks-focus) 36%, var(--dsh-tasks-line));
+  border-radius: var(--dsw-radius-sm, 9px);
+  background: var(--dsh-paper-card, var(--dsh-tasks-paper));
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--dsh-tasks-shadow) 38%, transparent);
+}
+.dsh-tasks-quick-input {
+  box-sizing: border-box; width: 100%; min-width: 0; min-height: 32px; padding: 5px 8px;
+  border: 1px solid var(--dsh-tasks-line); border-radius: var(--dsw-radius-xs, 6px);
+  background: var(--dsh-tasks-paper); color: var(--dsh-tasks-ink);
+  font: inherit; font-size: 13px; line-height: 1.4;
+}
+.dsh-tasks-quick-input::placeholder { color: var(--dsh-tasks-muted); opacity: 1; }
+.dsh-tasks-quick-input:focus {
+  outline: none; border-color: var(--dsh-tasks-focus);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsh-tasks-focus) 18%, transparent);
+}
+.dsh-tasks-quick-scope {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0;
+  font-size: 11px; color: var(--dsh-tasks-muted);
+}
+.dsh-tasks-quick-scope > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-tasks-quick-error { margin: 0; font-size: 11px; color: var(--dsh-paper-danger, var(--dsw-alias-state-error-primary)); }
+.dsh-tasks-quick-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.dsh-tasks-root .dsh-tasks-quick-actions :is(button.dsh-tasks-quick-submit, button.dsh-tasks-quick-cancel) {
+  min-height: 26px; height: auto; padding: 2px 10px; font-size: 12px; box-shadow: none;
+}
+.dsh-tasks-root .dsh-tasks-quick-actions button.dsh-tasks-quick-expand {
+  margin-inline-start: auto; min-height: 26px; height: auto; padding: 2px 6px;
+  border: 0; border-radius: var(--dsw-radius-xs, 6px); background: transparent;
+  color: var(--dsh-tasks-focus); font: inherit; font-size: 11.5px; font-weight: 550; box-shadow: none; cursor: pointer;
+}
+.dsh-tasks-root .dsh-tasks-quick-actions button.dsh-tasks-quick-expand:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--dsh-tasks-focus) 10%, transparent);
+}
+.dsh-tasks-unlock-toast {
+  position: absolute; inset-inline-end: var(--dsh-tasks-panel-gutter); inset-block-end: 42px; z-index: 6;
+  display: flex; align-items: flex-start; gap: 9px; max-width: min(400px, calc(100% - 2 * var(--dsh-tasks-panel-gutter)));
+  box-sizing: border-box; padding: 10px 10px 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--dsh-paper-success, var(--dsw-alias-state-success-primary)) 34%, var(--dsh-tasks-line));
+  border-inline-start: 3px solid var(--dsh-paper-success, var(--dsw-alias-state-success-primary));
+  border-radius: var(--dsw-radius-md, 10px);
+  background: var(--dsh-tasks-paper); color: var(--dsh-tasks-ink);
+  box-shadow: 0 8px 24px -6px color-mix(in srgb, var(--dsh-tasks-shadow) 65%, transparent);
+  transition: opacity .15s ease, transform .15s ease;
+}
+.dsh-tasks-unlock-icon {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 22px; height: 22px; border-radius: 50%; margin-top: 1px;
+  background: color-mix(in srgb, var(--dsh-paper-success, var(--dsw-alias-state-success-primary)) 14%, var(--dsh-tasks-paper));
+  color: var(--dsh-paper-success, var(--dsw-alias-state-success-primary));
+}
+.dsh-tasks-unlock-body { display: grid; gap: 4px; min-width: 0; font-size: 12px; }
+.dsh-tasks-unlock-body strong { font-size: 12.5px; font-weight: 650; }
+.dsh-tasks-unlock-links { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.dsh-tasks-root button.dsh-tasks-unlock-link {
+  min-height: 20px; height: auto; max-width: 100%; padding: 0; border: 0; box-shadow: none; background: transparent;
+  color: var(--dsh-tasks-focus); font: inherit; font-size: 12px; font-weight: 550; text-align: start;
+  text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dsh-tasks-root button.dsh-tasks-unlock-link:hover { color: var(--dsh-tasks-ink); }
+.dsh-tasks-unlock-more { font-size: 11px; color: var(--dsh-tasks-muted); font-variant-numeric: tabular-nums; }
+.dsh-tasks-unlock-toast > .dsh-tasks-icon-button { flex: none; width: 22px; height: 22px; min-width: 22px; min-height: 22px; }
+@media (pointer: coarse) {
+  .dsh-tasks-quick-input { min-height: 40px; }
+  .dsh-tasks-root .dsh-tasks-quick-actions button { min-height: 36px; }
+  .dsh-tasks-unlock-toast > .dsh-tasks-icon-button { width: 36px; height: 36px; min-width: 36px; min-height: 36px; }
+}
+.dsh-tasks-done-group-head {
+  display: flex; align-items: center; gap: 6px; margin: 10px 2px 6px;
+  font-size: 11px; font-weight: 600; color: var(--dsh-tasks-muted);
+}
+.dsh-tasks-done-group-head:first-child { margin-top: 2px; }
+.dsh-tasks-done-group-head > small {
+  padding: 0 5px; border-radius: 999px; font-size: 10px; font-weight: 600; line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--dsh-tasks-muted) 10%, var(--dsh-tasks-paper));
+  color: var(--dsh-tasks-muted);
+}
+.dsh-tasks-done-group-head::after {
+  content: ''; flex: 1; border-top: 1px dashed color-mix(in srgb, var(--dsh-tasks-line) 55%, transparent);
+}
+.dsh-tasks-running-elapsed { font-variant-numeric: tabular-nums; opacity: .88; font-weight: 500; }
+@keyframes dsh-tasks-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 38%, transparent); }
+  50% { box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 0%, transparent); }
+}
+body .dsh-tasks-root .dsh-tasks-card-state[data-task-status="running"] > span.dsh-tasks-status-label[data-status-tone="info"] > .dsh-tasks-dot {
+  animation: dsh-tasks-pulse 2.2s ease-in-out infinite;
+}
+.dsh-tasks-shortcuts-list {
+  display: grid; gap: 8px; list-style: none; margin: 12px 0 0; padding: 0;
+}
+.dsh-tasks-shortcuts-list li {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 7px 10px; border: 1px solid var(--dsh-tasks-rule); border-radius: var(--dsw-radius-sm, 8px);
+  background: color-mix(in srgb, var(--dsh-tasks-muted) 4%, var(--dsh-tasks-paper));
+  font-size: 13px;
+}
+.dsh-tasks-shortcuts-list kbd {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px;
+  padding: 0 7px; border: 1px solid var(--dsh-tasks-line); border-radius: 6px;
+  background: var(--dsh-tasks-paper); color: var(--dsh-tasks-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; font-weight: 600;
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--dsh-tasks-line) 65%, transparent);
+}
+.dsh-tasks-card-select {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 18px; height: 18px; margin-top: 3px; border-radius: 5px;
+  border: 1.5px solid var(--dsh-tasks-line); background: var(--dsh-tasks-paper); color: transparent;
+  transition: background-color .14s ease, border-color .14s ease, color .14s ease;
+}
+.dsh-tasks-root .dsh-tasks-card[data-select-mode] { cursor: pointer; }
+.dsh-tasks-root .dsh-tasks-card[data-selected] {
+  border-color: var(--dsh-tasks-focus);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--dsh-tasks-focus) 36%, transparent);
+}
+.dsh-tasks-root .dsh-tasks-card[data-selected] .dsh-tasks-card-select {
+  border-color: var(--dsh-tasks-focus); background: var(--dsh-tasks-focus);
+  color: var(--dsh-paper-onAccent, var(--dsw-alias-label-primary-foreground, #fff));
+}
+.dsh-tasks-batch-bar {
+  position: sticky; bottom: 8px; z-index: 7; align-self: center;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  max-width: calc(100% - 2 * var(--dsh-tasks-panel-gutter)); margin: 0 var(--dsh-tasks-panel-gutter) 8px;
+  padding: 8px 12px; box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--dsh-tasks-focus) 38%, var(--dsh-tasks-line));
+  border-radius: var(--dsw-radius-md, 12px);
+  background: var(--dsh-tasks-paper); color: var(--dsh-tasks-ink);
+  box-shadow: 0 10px 28px -6px color-mix(in srgb, var(--dsh-tasks-shadow) 72%, transparent);
+}
+.dsh-tasks-batch-count { font-size: 12.5px; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dsh-tasks-batch-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.dsh-tasks-root .dsh-tasks-batch-actions > button,
+.dsh-tasks-batch-move > summary {
+  box-sizing: border-box; min-height: 32px; height: 32px; padding: 0 12px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  line-height: 1; white-space: nowrap;
+}
+.dsh-tasks-batch-move { position: relative; display: inline-flex; }
+.dsh-tasks-batch-move > summary { list-style: none; cursor: pointer; }
+.dsh-tasks-batch-move > summary::-webkit-details-marker { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  body .dsh-tasks-root .dsh-tasks-card-state[data-task-status="running"] > span.dsh-tasks-status-label[data-status-tone="info"] > .dsh-tasks-dot {
+    animation: none;
+  }
+}
+@media (forced-colors: active) {
+  .dsh-tasks-batch-bar { background: Canvas; color: CanvasText; border-color: Highlight; }
+}
+.dsh-tasks-card-extlink {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  box-sizing: border-box;
+  height: 20px;
+  max-width: 130px;
+  padding: 0 6px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  text-decoration: none;
+  background: color-mix(in srgb, var(--dsh-tasks-muted) 8%, var(--dsh-tasks-paper));
+  color: var(--dsh-tasks-muted);
+  border: 1px solid color-mix(in srgb, var(--dsh-tasks-line) 75%, transparent);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.dsh-tasks-card-extlink:is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--dsh-tasks-focus) 11%, var(--dsh-tasks-paper));
+  color: var(--dsh-tasks-focus);
+  border-color: color-mix(in srgb, var(--dsh-tasks-focus) 45%, var(--dsh-tasks-line));
+}
+.dsh-tasks-card-extlink > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsh-tasks-extlink-arrow {
+  flex: none;
+  font-size: 10px;
+  opacity: .75;
 }
 .dsh-tasks-root .dsh-tasks-card[data-draggable], .dsh-tasks-card[data-draggable] .dsh-tasks-card-title { cursor: grab; }
 .dsh-tasks-root .dsh-tasks-card[data-dragging] { opacity: .35; }
 .dsh-tasks-drag-preview { display: flex; align-items: start; gap: 8px; padding: 12px 14px; background: var(--dsh-tasks-paper); color: var(--dsh-tasks-ink); border: 1px solid var(--dsh-tasks-focus); border-radius: var(--dsw-radius-lg, 12px); box-shadow: 0 8px 24px var(--dsh-tasks-shadow); cursor: grabbing; overflow: hidden; }
 .dsh-tasks-drag-preview > div { min-width: 0; } .dsh-tasks-drag-preview :is(strong,p) { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .dsh-tasks-drag-preview p { margin: 4px 0 0; color: var(--dsh-tasks-muted); font-size: 12px; }
 @container task-management (max-width: 390px) {
-  .dsh-tasks-root .dsh-tasks-column-manager .dsh-tasks-manage-create { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dsh-tasks-root .dsh-tasks-column-manager .dsh-tasks-manage-create { grid-template-columns: auto repeat(2, minmax(0, 1fr)); }
   .dsh-tasks-root .dsh-tasks-column-manager .dsh-tasks-manage-create > button { grid-column: 1 / -1; justify-self: end; }
 }
 @container task-management (max-width: 280px) {
   .dsh-tasks-root .dsh-tasks-column-manager .dsh-tasks-manage-create { grid-template-columns: minmax(0, 1fr); }
 }
 @container task-management (max-width: 340px) {
-  .dsh-tasks-column-manager .dsh-tasks-manage-list .dsh-tasks-column-form { grid-template-columns: auto minmax(0, 1fr); }
+  .dsh-tasks-column-manager .dsh-tasks-manage-list .dsh-tasks-column-form { grid-template-columns: auto auto minmax(0, 1fr); }
   .dsh-tasks-column-manager .dsh-tasks-row-tools { grid-column: 2 / -1; justify-self: end; flex-wrap: wrap; justify-content: flex-end; }
 }
 @media (max-width: 400px) {
@@ -1388,7 +2351,18 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
     --ll-ink: var(--task-ink-text); --ll-hi: var(--task-ink-hover);
   }
   & .dsh-tasks-date-control > [data-slot=date-picker] { isolation: auto; }
-  & .dsh-tasks-date-field { grid-template-columns: minmax(0, calc((100% - 12px)/2)); }
+  & .dsh-tasks-date-control > [data-slot=date-picker] > svg[data-ink] { display: block; }
+  & .dsh-tasks-detail-title-field { border-radius: var(--task-ink-small); }
+  & .dsh-tasks-detail-title-field:hover:not(:disabled):not(:focus) { background: var(--task-ink-hover); border-color: color-mix(in srgb, var(--task-ink-line) 70%, transparent); }
+  & .dsh-tasks-meta-card {
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--task-ink-line) 75%, transparent);
+    background: color-mix(in srgb, var(--dsh-tasks-sheet, var(--task-ink-fill)) 55%, var(--task-ink-fill));
+  }
+  & .dsh-tasks-stage-pill { border-radius: var(--task-ink-small); }
+  & :is(.dsh-tasks-delivery-banner, .dsh-tasks-evidence-card, .dsh-tasks-delivery-criteria) { border-radius: var(--task-ink-radius); }
+  & .dsh-tasks-evidence-card { background: var(--task-ink-fill); border-color: color-mix(in srgb, var(--task-ink-line) 75%, transparent); }
+  & .dsh-tasks-image-add[data-empty]:hover { background: var(--task-ink-hover); }
   & [data-task-ink=button] { border-radius: var(--task-ink-small); box-shadow: none; }
   & :is(.dsh-tasks-secondary, .dsh-tasks-retry)[data-task-ink=button] { border: 1px solid var(--task-ink-line); background: var(--task-ink-fill); color: var(--task-ink-text); }
   & .dsh-tasks-primary[data-task-ink=button] { background: var(--dsh-looseleaf-primary-fill, var(--task-ink-focus)); color: var(--dsh-looseleaf-primary-ink, var(--dsh-paper-onAccent)); }
@@ -1407,9 +2381,8 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
   & [data-task-ink=overlay] :is(.dsh-tasks-select-option, .dsh-tasks-menu button, button) { border-radius: var(--task-ink-small); }
   & [data-task-ink=overlay] :is([data-active=true], button:hover:not(:disabled)) { background: var(--task-ink-hover); }
   & [data-task-ink=overlay] button:focus-visible { outline: 2px solid var(--task-ink-focus); outline-offset: -2px; }
-  @container task-detail (max-width: 360px) { & .dsh-tasks-date-field { grid-template-columns: minmax(0, 1fr); } }
   @media (forced-colors: active) {
-    & [data-task-ink-layer], & .dsh-tasks-date-control [data-ink] { display: none; }
+    & [data-task-ink-layer], & .dsh-tasks-date-control > [data-slot=date-picker] > svg[data-ink], & .dsh-tasks-date-control [data-ink] { display: none; }
     & :is([data-task-ink=field], [data-task-ink=badge], [data-task-ink=empty]):is([data-task-ink], :has(> [data-task-ink-ready])) { border-color: CanvasText; }
     & [data-task-ink=tabs][aria-selected=true]:has(> [data-task-ink-ready])::after { content: ''; border-color: Highlight; }
     & [data-task-ink=field]:focus-within, & :is(button, [data-task-ink=button]):focus-visible { outline-color: Highlight; }
@@ -1431,6 +2404,9 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
   box-sizing: border-box; width: 100%; min-height: 40px; padding: 8px 11px; color: inherit; border: 0; border-radius: inherit; background: transparent; box-shadow: none;
 }
 .dsh-tasks-root .dsh-tasks-editor-drawer [data-task-ink=field] > textarea { display: block; }
+.dsh-tasks-root .dsh-tasks-editor-drawer [data-task-ink=field] > textarea.dsh-tasks-description-input {
+  min-height: 60px; min-height: calc(2lh + 18px);
+}
 .dsh-tasks-root .dsh-tasks-editor-drawer [data-task-ink=field] > .dsh-tasks-select-trigger { padding-inline-end: 44px; }
 .dsh-tasks-editor-drawer .dsh-tasks-select-arrow { position: absolute; inset-block: 7px; inset-inline-end: 1px; display: grid; place-items: center; width: 33px; border-inline-start: 1px solid var(--dsh-tasks-line); color: var(--dsh-tasks-muted); pointer-events: none; }
 .dsh-tasks-editor-drawer .dsh-tasks-select-trigger[aria-expanded=true] + .dsh-tasks-select-arrow { color: var(--dsh-tasks-focus); }
@@ -1444,6 +2420,372 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
 @media (forced-colors: active) {
   .dsh-tasks-root .dsh-tasks-editor-drawer [data-task-ink=field] { border-color: CanvasText; }
   .dsh-tasks-root .dsh-tasks-editor-drawer [data-task-ink=field]:is(:focus-within, :has(> [aria-expanded=true])) { outline-color: Highlight; }
+}
+
+.dsh-tasks-sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+.dsh-tasks-detail-title-wrap { position: relative; min-width: 0; }
+.dsh-tasks-root .dsh-tasks-detail-title-field {
+  box-sizing: border-box; display: block; width: 100%; min-width: 0;
+  min-height: 30px; min-block-size: calc(1.42em + 6px);
+  padding: 3px 26px 3px 6px; margin-inline-start: -6px;
+  border: 1px solid transparent; border-radius: var(--dsw-radius-sm, 7px);
+  background: transparent; color: var(--dsh-tasks-ink);
+  font: inherit; font-size: 17px; font-weight: 650; letter-spacing: -.015em; line-height: 1.42;
+  field-sizing: content; resize: none; overflow: hidden; overflow-wrap: anywhere;
+  transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+.dsh-tasks-root .dsh-tasks-detail-title-field::placeholder { color: var(--dsh-tasks-muted); font-weight: 500; }
+.dsh-tasks-root .dsh-tasks-detail-title-field:hover:not(:disabled):not(:focus) {
+  background: color-mix(in srgb, var(--dsh-tasks-muted) 6%, transparent);
+  border-color: color-mix(in srgb, var(--dsh-tasks-line) 55%, transparent);
+}
+.dsh-tasks-root .dsh-tasks-detail-title-field:focus {
+  outline: none; background: var(--dsh-tasks-paper); border-color: var(--dsh-tasks-focus);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsh-tasks-focus) 22%, transparent);
+}
+.dsh-tasks-detail-title-affordance {
+  position: absolute; inset-inline-end: 10px; top: 8px; display: inline-flex;
+  color: var(--dsh-tasks-muted); opacity: 0; pointer-events: none; transition: opacity .15s ease;
+}
+.dsh-tasks-detail-title-wrap:is(:hover, :focus-within) .dsh-tasks-detail-title-affordance { opacity: .82; }
+.dsh-tasks-detail-title-wrap:focus-within .dsh-tasks-detail-title-affordance { opacity: 0; }
+@media (hover: none), (pointer: coarse) {
+  .dsh-tasks-detail-title-affordance { opacity: .65; }
+}
+.dsh-tasks-required { color: var(--dsw-alias-state-error-primary, #c2410c); font-weight: 600; }
+
+.dsh-tasks-create-meta { gap: 6px 10px; }
+.dsh-tasks-create-intro { color: var(--dsh-tasks-muted); font-size: 12px; }
+.dsh-tasks-stage-dropdown { position: relative; display: inline-flex; }
+.dsh-tasks-stage-dropdown > summary { list-style: none; }
+.dsh-tasks-stage-dropdown > summary::-webkit-details-marker { display: none; }
+.dsh-tasks-stage-pill {
+  --stage-tone: var(--dsh-tasks-muted);
+  box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px;
+  min-height: 26px; max-width: 220px; padding: 2px 9px;
+  border: 1px solid color-mix(in srgb, var(--dsh-tasks-col-color, var(--stage-tone)) 32%, var(--dsh-tasks-rule));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dsh-tasks-col-color, var(--stage-tone)) 9%, var(--dsh-tasks-paper));
+  color: var(--dsh-tasks-ink); font-size: 12px; font-weight: 550; line-height: 1.3; cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease;
+}
+.dsh-tasks-stage-pill[data-stage="doing"] { --stage-tone: var(--dsw-alias-state-business-primary); }
+.dsh-tasks-stage-pill[data-stage="done"] { --stage-tone: var(--dsw-alias-state-success-primary); }
+.dsh-tasks-stage-dropdown.is-disabled .dsh-tasks-stage-pill { opacity: .68; cursor: default; }
+.dsh-tasks-stage-dropdown > summary.dsh-tasks-stage-pill:hover {
+  border-color: var(--dsh-tasks-col-color, var(--dsh-tasks-focus));
+  background: color-mix(in srgb, var(--dsh-tasks-col-color, var(--stage-tone)) 14%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-stage-pill-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-tasks-stage-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  background: var(--dsh-tasks-col-color, var(--dsh-tasks-muted));
+}
+.dsh-tasks-stage-pill[data-stage="doing"] .dsh-tasks-stage-dot,
+.dsh-tasks-stage-dot[data-stage="doing"] { background: var(--dsh-tasks-col-color, var(--dsw-alias-state-business-primary)); }
+.dsh-tasks-stage-pill[data-stage="done"] .dsh-tasks-stage-dot,
+.dsh-tasks-stage-dot[data-stage="done"] { background: var(--dsh-tasks-col-color, var(--dsw-alias-state-success-primary)); }
+.dsh-tasks-command-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.dsh-tasks-unsaved-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  min-height: 22px; padding: 0 8px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary)) 38%, transparent);
+  background: color-mix(in srgb, var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary)) 11%, var(--dsh-tasks-paper));
+  color: var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary));
+  font-size: 11px; font-weight: 600;
+}
+.dsh-tasks-unsaved-pill .dsh-tasks-dot { border-color: currentColor; background: currentColor; width: 6px; height: 6px; }
+
+.dsh-tasks-detail-tabs { gap: 18px; overflow-x: auto; scrollbar-width: none; }
+.dsh-tasks-detail-tabs::-webkit-scrollbar { display: none; }
+.dsh-tasks-detail-tabs button {
+  display: inline-flex; align-items: center; gap: 6px; flex: none; white-space: nowrap;
+  padding: 6px 4px 8px;
+}
+.dsh-tasks-tab-count {
+  display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box;
+  border-radius: 999px; background: color-mix(in srgb, var(--dsh-tasks-muted) 11%, var(--dsh-tasks-paper));
+  color: var(--dsh-tasks-muted); font-size: 11px; font-weight: 550; font-variant-numeric: tabular-nums;
+}
+.dsh-tasks-detail-tabs button[aria-selected="true"] .dsh-tasks-tab-count {
+  background: color-mix(in srgb, var(--dsh-tasks-focus) 14%, var(--dsh-tasks-paper));
+  color: var(--dsh-tasks-focus);
+}
+.dsh-tasks-tab-badge {
+  display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border-radius: 999px;
+  font-size: 10px; font-weight: 600; white-space: nowrap;
+  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  background: color-mix(in srgb, currentColor 9%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-tab-badge[data-tone="pending"] { color: var(--dsh-paper-info, var(--dsw-alias-state-business-primary)); }
+.dsh-tasks-tab-badge[data-tone="returned"] { color: var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary)); }
+.dsh-tasks-tab-badge[data-tone="accepted"] { color: var(--dsh-paper-success, var(--dsw-alias-state-success-primary)); }
+.dsh-tasks-tab-badge .dsh-tasks-dot { width: 5px; height: 5px; border-color: currentColor; background: currentColor; }
+
+.dsh-tasks-root .dsh-tasks-segmented {
+  display: inline-flex; align-items: center; gap: 2px; padding: 2px;
+  border: 1px solid var(--dsh-tasks-rule); border-radius: 8px;
+  background: color-mix(in srgb, var(--dsh-tasks-muted) 6%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-root .dsh-tasks-segmented > button {
+  min-height: 26px; padding: 2px 9px; border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: var(--dsh-tasks-muted); font: inherit; font-size: 12px; cursor: pointer;
+  transition: background-color .14s ease, color .14s ease, border-color .14s ease;
+}
+.dsh-tasks-root .dsh-tasks-segmented > button:hover:not(:disabled) {
+  color: var(--dsh-tasks-ink); border-color: transparent; background: color-mix(in srgb, var(--dsh-tasks-muted) 8%, transparent);
+}
+.dsh-tasks-root .dsh-tasks-segmented > button[aria-pressed="true"] {
+  background: var(--dsh-tasks-paper); color: var(--dsh-tasks-ink);
+  border-color: var(--dsh-tasks-line); font-weight: 600;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--dsh-tasks-shadow) 35%, transparent);
+}
+@media (pointer: coarse) {
+  .dsh-tasks-root .dsh-tasks-segmented > button { min-height: 40px; }
+}
+
+.dsh-tasks-description-markdown > :first-child,
+.dsh-tasks-description-markdown > div > :first-child { margin-block-start: 0; }
+.dsh-tasks-description-markdown > :last-child,
+.dsh-tasks-description-markdown > div > :last-child { margin-block-end: 0; }
+.dsh-tasks-description-markdown > div > :is(p, ul, ol) { margin-block: 6px; }
+.dsh-tasks-markdown-fallback { margin: 0; white-space: pre-wrap; font: inherit; overflow-wrap: anywhere; }
+.dsh-tasks-description-markdown.is-editable {
+  padding: 6px 8px; margin: -6px -8px; border-radius: var(--dsw-radius-sm, 8px); cursor: text;
+  transition: background-color .14s ease;
+}
+.dsh-tasks-description-markdown.is-editable:hover { background: color-mix(in srgb, var(--dsh-tasks-muted) 5%, transparent); }
+
+.dsh-tasks-criteria { display: grid; gap: 6px; min-inline-size: 0; }
+.dsh-tasks-criteria-read {
+  padding: 8px 12px; margin: 0;
+  border: 1px solid color-mix(in srgb, var(--dsh-tasks-focus) 22%, var(--dsh-tasks-rule));
+  border-inline-start: 3px solid color-mix(in srgb, var(--dsh-tasks-focus) 72%, var(--dsh-tasks-rule));
+  border-radius: var(--dsw-radius-sm, 8px);
+  background: color-mix(in srgb, var(--dsh-tasks-focus) 4%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-criteria-read.is-editable:hover {
+  background: color-mix(in srgb, var(--dsh-tasks-focus) 7%, var(--dsh-tasks-paper));
+}
+
+.dsh-tasks-disclosure-row { display: flex; }
+.dsh-tasks-root .dsh-tasks-disclosure-trigger {
+  width: 100%; justify-content: flex-start; gap: 7px; min-height: 34px; padding: 6px 10px;
+  border: 1px dashed var(--dsh-tasks-rule); border-radius: var(--dsw-radius-sm, 8px);
+  background: transparent; color: var(--dsh-tasks-muted); font-weight: 500; box-shadow: none;
+  transition: border-color .15s ease, background-color .15s ease, color .15s ease;
+}
+.dsh-tasks-root .dsh-tasks-disclosure-trigger:hover:not(:disabled) {
+  border-color: var(--dsh-tasks-line); color: var(--dsh-tasks-ink);
+  background: color-mix(in srgb, var(--dsh-tasks-muted) 5%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-root .dsh-tasks-disclosure-trigger > :last-child { margin-inline-start: auto; opacity: .75; }
+
+.dsh-tasks-meta-card {
+  display: grid; gap: 12px; min-width: 0; padding: 12px 14px;
+  border: 1px solid var(--dsh-tasks-rule); border-radius: var(--dsw-radius-md, 10px);
+  background: color-mix(in srgb, var(--dsh-tasks-muted) 4%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-meta-card-head {
+  font-size: 11px; font-weight: 600; letter-spacing: .04em; color: var(--dsh-tasks-muted);
+}
+.dsh-tasks-meta-card > .dsh-tasks-bindings {
+  padding-top: 12px; border-top: 1px dashed var(--dsh-tasks-rule);
+}
+.dsh-tasks-workspace-path {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.dsh-tasks-prerequisites ul { display: grid; gap: 5px; }
+.dsh-tasks-prerequisites li {
+  padding: 5px 8px; border: 1px solid var(--dsh-tasks-rule); border-radius: var(--dsw-radius-sm, 7px);
+  background: color-mix(in srgb, var(--dsh-tasks-muted) 3%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-image-add[data-empty] {
+  padding: 12px 14px; text-align: center; cursor: pointer;
+}
+.dsh-tasks-root .dsh-tasks-editor-drawer .dsh-tasks-date-control > [data-slot=date-picker] > svg[data-ink] { display: none; }
+.dsh-tasks-image-add[data-empty]:hover {
+  border-color: var(--dsh-tasks-focus);
+  background: color-mix(in srgb, var(--dsh-tasks-focus) 4%, var(--dsh-tasks-paper));
+}
+
+.dsh-tasks-detail-sessions { display: flex; flex-wrap: wrap; gap: 6px; }
+.dsh-tasks-root .dsh-tasks-session-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: auto; min-height: 24px; padding: 2px 8px;
+  border: 1px solid var(--dsh-tasks-rule); border-radius: 999px;
+  background: color-mix(in srgb, var(--dsh-tasks-muted) 6%, var(--dsh-tasks-paper));
+  color: var(--dsh-tasks-ink); font-size: 11px; font-weight: 500;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; box-shadow: none;
+}
+.dsh-tasks-root .dsh-tasks-session-chip:hover:not(:disabled) {
+  border-color: var(--dsh-tasks-focus); color: var(--dsh-tasks-focus);
+  background: color-mix(in srgb, var(--dsh-tasks-focus) 8%, var(--dsh-tasks-paper));
+}
+
+.dsh-tasks-comment-form[data-collapsed] {
+  gap: 0; padding: 0; border: 0; background: transparent; margin-block-end: 16px;
+}
+.dsh-tasks-comment-form[data-collapsed] [data-task-ink=field] > textarea {
+  min-height: 38px; min-block-size: 38px; padding: 7px 11px; resize: none; overflow: hidden; line-height: 1.45;
+}
+.dsh-tasks-comment-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.dsh-tasks-comment-actions > .dsh-tasks-field-hint { margin-inline-end: auto; }
+.dsh-tasks-comment-form button.dsh-tasks-comment-cancel { font-weight: 500; }
+
+.dsh-tasks-activity > li[data-tier="system"] { padding-block-end: 6px; }
+.dsh-tasks-activity > li[data-tier="system"]:not(:last-child)::before { inset-block: 24px 0; }
+.dsh-tasks-activity > li[data-tier="system"] .dsh-tasks-activity-marker {
+  width: 24px; height: 24px; margin-inline: auto; margin-top: 1px;
+  border-color: var(--dsh-tasks-rule); background: var(--dsh-tasks-paper); color: var(--dsh-tasks-muted);
+}
+.dsh-tasks-activity-row {
+  display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 3px 10px;
+  min-height: 24px; padding-block: 2px; font-size: 12px;
+}
+.dsh-tasks-activity-row-main { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-width: 0; flex: 1 1 180px; }
+.dsh-tasks-activity-inline { color: var(--dsh-tasks-muted); }
+.dsh-tasks-activity > li[data-tier="system"] .dsh-tasks-activity-meta { font-size: 11px; flex: none; }
+
+.dsh-tasks-activity > li[data-tier="content"] { padding-block: 2px 12px; }
+.dsh-tasks-activity > li[data-tier="content"] .dsh-tasks-activity-entry {
+  padding: 10px 12px; border: 1px solid var(--dsh-tasks-rule);
+  border-inline-start: 3px solid var(--dsh-tasks-line);
+  border-radius: var(--dsw-radius-md, 10px); background: var(--dsh-tasks-paper);
+}
+.dsh-tasks-activity > li[data-kind=comment] .dsh-tasks-activity-entry {
+  border-inline-start-color: var(--dsh-tasks-focus);
+  background: color-mix(in srgb, var(--dsh-tasks-focus) 4%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-activity > li[data-kind=delivery-accepted] .dsh-tasks-activity-marker {
+  color: var(--dsh-paper-success, var(--dsw-alias-state-success-primary));
+  background: color-mix(in srgb, var(--dsh-paper-success, var(--dsw-alias-state-success-primary)) 12%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-activity > li[data-kind=delivery-accepted] .dsh-tasks-activity-entry {
+  border-inline-start-color: var(--dsh-paper-success, var(--dsw-alias-state-success-primary));
+}
+.dsh-tasks-activity > li[data-kind=delivery-returned] .dsh-tasks-activity-marker {
+  color: var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary));
+  background: color-mix(in srgb, var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary)) 12%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-activity > li[data-kind=delivery-returned] .dsh-tasks-activity-entry {
+  border-inline-start-color: var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary));
+}
+.dsh-tasks-activity > li[data-kind=delivery-submitted] .dsh-tasks-activity-marker {
+  color: var(--dsh-paper-info, var(--dsw-alias-state-business-primary));
+  background: color-mix(in srgb, var(--dsh-paper-info, var(--dsw-alias-state-business-primary)) 12%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-activity > li[data-kind=delivery-submitted] .dsh-tasks-activity-entry {
+  border-inline-start-color: var(--dsh-paper-info, var(--dsw-alias-state-business-primary));
+}
+.dsh-tasks-activity > li[data-kind=delivery-continued] .dsh-tasks-activity-entry {
+  border-inline-start-color: var(--dsh-tasks-focus);
+}
+.dsh-tasks-activity-event-title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.dsh-tasks-root .dsh-tasks-activity-comment { margin: 6px 0 0; white-space: normal; line-height: 1.55; }
+.dsh-tasks-root .dsh-tasks-activity-comment.is-clamped {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  max-height: calc(3 * 1.55em + 2px); overflow: hidden;
+}
+.dsh-tasks-activity-card-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.dsh-tasks-root .dsh-tasks-activity-link {
+  padding: 2px 4px; min-height: 24px; height: auto; border: 0; box-shadow: none; background: transparent;
+  color: var(--dsh-tasks-focus); font-size: 12px; font-weight: 550;
+}
+.dsh-tasks-root .dsh-tasks-activity-link:hover:not(:disabled) { text-decoration: underline; background: transparent; }
+
+.dsh-tasks-delivery-banner {
+  --banner-tone: var(--dsh-tasks-muted);
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 14px;
+  padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--banner-tone) 30%, var(--dsh-tasks-rule));
+  border-radius: var(--dsw-radius-md, 10px);
+  background: color-mix(in srgb, var(--banner-tone) 8%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-delivery-banner[data-tone="pending"] { --banner-tone: var(--dsh-paper-info, var(--dsw-alias-state-business-primary)); }
+.dsh-tasks-delivery-banner[data-tone="returned"] { --banner-tone: var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary)); }
+.dsh-tasks-delivery-banner[data-tone="accepted"] { --banner-tone: var(--dsh-paper-success, var(--dsw-alias-state-success-primary)); }
+.dsh-tasks-delivery-banner-info { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
+.dsh-tasks-delivery-banner-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-inline-start: auto; }
+.dsh-tasks-delivery-times { display: flex; flex-wrap: wrap; gap: 2px 6px; font-size: 12px; color: var(--dsh-tasks-muted); font-variant-numeric: tabular-nums; }
+.dsh-tasks-delivery-runtime-label { font-size: 12px; font-weight: 600; color: var(--dsh-tasks-ink); }
+
+.dsh-tasks-delivery-criteria {
+  border: 1px solid var(--dsh-tasks-rule); border-radius: var(--dsw-radius-md, 10px);
+  background: color-mix(in srgb, var(--dsh-tasks-muted) 3%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-delivery-criteria > summary {
+  display: flex; align-items: center; gap: 7px; padding: 9px 12px; list-style: none;
+  font-size: 12px; font-weight: 600; color: var(--dsh-tasks-ink); cursor: pointer;
+}
+.dsh-tasks-delivery-criteria > summary::-webkit-details-marker { display: none; }
+.dsh-tasks-delivery-criteria > summary > .dsh-tasks-icon:first-child { color: var(--dsh-tasks-focus); }
+.dsh-tasks-delivery-criteria > summary > :last-child { margin-inline-start: auto; color: var(--dsh-tasks-muted); transition: transform .15s ease; }
+.dsh-tasks-delivery-criteria[open] > summary > :last-child { transform: rotate(180deg); }
+.dsh-tasks-delivery-criteria-body {
+  padding: 0 12px 10px; border-top: 1px dashed var(--dsh-tasks-rule); padding-top: 9px;
+}
+
+.dsh-tasks-evidence-card {
+  display: grid; gap: 7px; padding: 12px 14px;
+  border: 1px solid var(--dsh-tasks-rule); border-radius: var(--dsw-radius-md, 10px);
+  background: var(--dsh-tasks-paper);
+}
+.dsh-tasks-evidence-card h4 {
+  display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; font-weight: 650; color: var(--dsh-tasks-ink);
+}
+.dsh-tasks-evidence-card h4 > .dsh-tasks-icon { color: var(--dsh-tasks-focus); }
+.dsh-tasks-evidence-callout {
+  border-color: color-mix(in srgb, var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary)) 36%, var(--dsh-tasks-rule));
+  border-inline-start: 3px solid var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary));
+  background: color-mix(in srgb, var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary)) 7%, var(--dsh-tasks-paper));
+}
+.dsh-tasks-evidence-callout h4 > .dsh-tasks-icon { color: var(--dsh-paper-warning, var(--dsw-alias-state-warn-primary)); }
+
+.dsh-tasks-evidence-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.dsh-tasks-evidence-links a {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px;
+  border: 1px solid var(--dsh-tasks-rule); border-radius: 999px;
+  background: color-mix(in srgb, var(--dsh-tasks-focus) 5%, var(--dsh-tasks-paper));
+  color: var(--dsh-tasks-focus); font-size: 12px; font-weight: 500; text-decoration: none;
+}
+.dsh-tasks-evidence-links a:hover {
+  border-color: var(--dsh-tasks-focus);
+  background: color-mix(in srgb, var(--dsh-tasks-focus) 11%, var(--dsh-tasks-paper));
+}
+
+.dsh-tasks-delivery-status {
+  display: inline-flex; align-items: center; gap: 6px; margin: 0;
+  color: var(--dsh-paper-success, var(--dsw-alias-state-success-primary)); font-size: 12px; font-weight: 600;
+}
+.dsh-tasks-delivery-empty {
+  padding: 18px 14px; border: 1px dashed var(--dsh-tasks-line); border-radius: var(--dsw-radius-md, 10px);
+  text-align: center;
+}
+
+.dsh-tasks-root .dsh-tasks-editor-drawer .dsh-tasks-primary:disabled {
+  opacity: .5; box-shadow: none; cursor: default;
+}
+
+@media (pointer: coarse) {
+  .dsh-tasks-stage-pill { min-height: 36px; }
+  .dsh-tasks-root .dsh-tasks-disclosure-trigger { min-height: 44px; }
+  .dsh-tasks-root .dsh-tasks-session-chip { min-height: 36px; padding-inline: 10px; }
+  .dsh-tasks-root .dsh-tasks-activity-link { min-height: 40px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dsh-tasks-root .dsh-tasks-editor-drawer * { transition: none; }
+}
+@media (forced-colors: active) {
+  .dsh-tasks-meta-card, .dsh-tasks-delivery-banner, .dsh-tasks-delivery-criteria, .dsh-tasks-evidence-card, .dsh-tasks-stage-pill {
+    border-color: CanvasText;
+  }
+  .dsh-tasks-root .dsh-tasks-detail-title-field:focus { border-color: Highlight; outline: 2px solid Highlight; }
 }
 `
 
@@ -1507,7 +2849,10 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         const rect = this.node.querySelector('summary').getBoundingClientRect()
         const below = window.innerHeight - rect.bottom - 14, above = rect.top - 14
         const up = below < this.panel.scrollHeight && above > below
-        const left = this.node.classList.contains('dsh-tasks-filter') ? rect.left : rect.right - this.panel.offsetWidth
+        const left = this.node.classList.contains('dsh-tasks-filter')
+          || this.node.classList.contains('dsh-tasks-col-color-picker')
+          || this.node.classList.contains('dsh-tasks-stage-dropdown')
+          ? rect.left : rect.right - this.panel.offsetWidth
         Object.assign(this.panel.style, { left: Math.max(8, Math.min(left, window.innerWidth - this.panel.offsetWidth - 8)) + 'px',
           right: 'auto', top: up ? 'auto' : rect.bottom + 5 + 'px', bottom: up ? window.innerHeight - rect.top + 5 + 'px' : 'auto',
           maxHeight: Math.max(48, up ? above : below) + 'px' })
@@ -1515,9 +2860,13 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       detach = () => {
         window.document.removeEventListener('pointerdown', this.outside, true)
         window.document.removeEventListener('focusin', this.outside, true)
-        window.removeEventListener('blur', this.close)
+        window.removeEventListener('blur', this.onWindowBlur)
         window.removeEventListener('resize', this.position)
         window.document.removeEventListener('scroll', this.position, true)
+      }
+      onWindowBlur = () => {
+        if (this.node?.contains(window.document.activeElement) && window.document.activeElement?.type === 'color') return
+        this.close()
       }
       close = () => { if (this.node) this.node.open = false; this.detach() }
       outside = event => { if (!this.node.contains(event.target)) this.close() }
@@ -1535,7 +2884,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
               }
               window.document.addEventListener('pointerdown', this.outside, true)
               window.document.addEventListener('focusin', this.outside, true)
-              window.addEventListener('blur', this.close)
+              window.addEventListener('blur', this.onWindowBlur)
               if (this.panel) {
                 this.panel.showPopover()
                 this.position()
@@ -1546,7 +2895,9 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
             onToggle?.(event)
           },
           'data-dismiss-menu': '',
-          onBlur: event => { if (!event.currentTarget.contains(event.relatedTarget)) this.close() },
+          onBlur: event => {
+            if (!event.currentTarget.contains(event.relatedTarget) && !(event.currentTarget.contains(window.document.activeElement) && window.document.activeElement?.type === 'color')) this.close()
+          },
           onKeyDown: event => {
             if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); this.close(); this.node.querySelector('summary').focus() }
             else onKeyDown?.(event)
@@ -1575,7 +2926,8 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       }
       matches(query) {
         const value = query.trim(), term = value.toLocaleLowerCase(), rows = this.options()
-        const matches = rows.filter(row => [row.label, row.value, row.group].some(text => String(text ?? '').toLocaleLowerCase().includes(term)))
+        const filtered = rows.filter(row => [row.label, row.value, row.group].some(text => String(text ?? '').toLocaleLowerCase().includes(term)))
+        const matches = this.props.maxVisible > 0 ? filtered.slice(0, this.props.maxVisible) : filtered
         if (term && this.props.onCreate && value.length <= this.props.maxLength
           && !rows.some(row => String(this.props.createByValue ? row.value : row.label).toLocaleLowerCase() === term)) {
           matches.push({ create: true, value, label: this.props.t('addValue') + '「' + value + '」' })
@@ -1666,7 +3018,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         selectOnly ? h('button', { ...triggerProps, type: 'button', title: selected?.label },
           h('span', null, selected?.label), h(Icon, { name: 'chevronDown', size: 14 }))
         : h('input', { ...triggerProps, type: 'text', autoComplete: 'off', 'aria-autocomplete': 'list', title: this.state.open ? undefined : selected?.label,
-          placeholder: this.props.t(this.props.onCreate ? 'findOrCreate' : 'findOption'), value: this.state.open ? this.state.query : selected?.label ?? '',
+          placeholder: this.props.placeholder ?? this.props.t(this.props.onCreate ? 'findOrCreate' : 'findOption'), value: this.state.open ? this.state.query : selected?.label ?? '',
           onFocus: event => event.target.select(),
           onChange: event => { const query = event.target.value; if (!this.state.open) this.open(false, query)
             else this.setState({ query, active: this.matches(query).findIndex(row => !row.disabled) }, this.reveal) },
@@ -1688,12 +3040,26 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       }
     }
 
-    function StatusBadge({ status, label, time, paperInk }) {
+    const STATUS_TONES = {
+      error: 'danger',
+      approval: 'warn',
+      question: 'warn',
+      reviewReturned: 'warn',
+      launchPending: 'warn',
+      dependencyBlocked: 'blocked',
+      reviewPending: 'action',
+      running: 'info',
+      dependencyReady: 'ready',
+      reviewAccepted: 'success',
+    }
+    const statusToneOf = status => STATUS_TONES[status] || 'muted'
+
+    function StatusBadge({ status, label, time, elapsed, paperInk }) {
       return h('div', { className: 'dsh-tasks-card-state', 'data-task-status': status },
-        h('span', { className: 'dsh-tasks-status-label', 'data-task-ink': paperInk ? 'badge' : undefined },
+        h('span', { className: 'dsh-tasks-status-label', 'data-status-tone': statusToneOf(status), 'data-task-ink': paperInk ? 'badge' : undefined },
           paperInk ? taskInk('badge') : null,
-          h('span', { className: 'dsh-tasks-dot', 'aria-hidden': true,
-            style: { '--dsh-tasks-dot-fill': ({ running: 'var(--dsw-alias-state-business-primary)', approval: '#ef4444', question: '#ef4444', error: '#f59e0b' })[status] } }), label),
+          h('span', { className: 'dsh-tasks-dot', 'aria-hidden': true }), label,
+          elapsed ? h('span', { className: 'dsh-tasks-running-elapsed' }, '· ' + elapsed) : null),
         time ? h('span', { className: 'dsh-tasks-status-time' }, '· ' + time) : null)
     }
 
@@ -1704,13 +3070,26 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           || typeof model.reasoningEffort === 'string')
     }
     const isSessionId = id => typeof id === 'string' && /^(?:session-)?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)
-    const isStatus = value => value && isSessionId(value.sessionId) && RUNTIME.includes(value.status)
+    const isStatus = value => value && isSessionId(value.sessionId) && RUNTIME.includes(value.status) && (value.since === undefined || typeof value.since === 'string')
     const unknownFork = receipt => receipt?.phase === 'forking' && !receipt.sessionId
     const receiptFor = (task, form) => task.launch?.input.requestId === form.retryInput?.requestId ? task.launch : undefined
     const busySource = runtime => ['running', 'approval', 'question'].includes(runtime)
     const forkBlock = (options, runtime) => runtime === 'missing' ? 'missing' : runtime === 'unknown' ? 'sessionStatusUnknown' : busySource(runtime) ? 'sessionBusy' : options.status !== 'ready' || options.canFork !== true ? 'forkUnavailable' : undefined
     const unfinishedLaunch = task => task.launch && !['complete', 'abandoned'].includes(task.launch.phase)
-    const canStartNewConversation = task => !!task.activeSessionId && !unfinishedLaunch(task)
+    const inProgressUnlinked = task => task.stage === 'doing' && !task.activeSessionId
+    const canStartNewConversation = task => !!task.activeSessionId && !unfinishedLaunch(task) && task.delivery?.status !== 'pending'
+    function evidenceUrl(value) {
+      if (typeof value !== 'string' || !/^https?:\/\/[^/\\?#\s@]+(?:[/?#]|$)/i.test(value) || /[\\\s\u0000-\u001f\u007f]/u.test(value)) return undefined
+      return value
+    }
+    const optionalText = value => value === undefined || typeof value === 'string'
+    function isDelivery(delivery) {
+      return delivery && typeof delivery.id === 'string' && isSessionId(delivery.sessionId)
+        && ['pending', 'accepted', 'returned'].includes(delivery.status)
+        && typeof delivery.summary === 'string' && typeof delivery.submittedAt === 'string'
+        && ['verification', 'remaining', 'feedback', 'reviewedAt', 'continuedAt', 'criteria'].every(key => optionalText(delivery[key]))
+        && (delivery.links === undefined || Array.isArray(delivery.links) && delivery.links.every(link => link && typeof link.label === 'string' && typeof link.url === 'string'))
+    }
     const runtimeOf = (task, statuses) => task.activeSessionId
       ? statuses[task.id]?.sessionId === task.activeSessionId ? statuses[task.id].status : 'unknown'
       : 'notStarted'
@@ -1720,6 +3099,8 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         && Number.isSafeInteger(task.revision) && task.revision > 0
         && typeof task.title === 'string' && task.title.trim().length > 0
         && (task.brief === undefined || typeof task.brief === 'string')
+        && validCriteria(task.acceptanceCriteria) && validDependencies(task.dependencyIds)
+        && (task.delivery === undefined || isDelivery(task.delivery))
         && (task.workspaceId === undefined || typeof task.workspaceId === 'string')
         && (task.model === undefined || isModel(task.model))
         && (task.activeSessionId === undefined || isSessionId(task.activeSessionId))
@@ -1740,7 +3121,8 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
     function readDraft() {
       try {
         const draft = JSON.parse(window.sessionStorage.getItem(DRAFT_KEY))
-        if (!draft || typeof draft.title !== 'string' || typeof draft.brief !== 'string') return
+        if (!draft || typeof draft.title !== 'string' || typeof draft.brief !== 'string'
+          || !validCriteria(draft.acceptanceCriteria) || !validDependencies(draft.dependencyIds)) return
         if ((draft.workspaceId !== undefined && typeof draft.workspaceId !== 'string')
           || (draft.model !== undefined && !isModel(draft.model))
           || (draft.stage !== undefined && !Object.hasOwn(STAGES, draft.stage))) return
@@ -1752,12 +3134,23 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           || input.workspaceId !== (draft.workspaceId || undefined)
           || JSON.stringify(input.model) !== JSON.stringify(draft.model)
           || metaKeys.some(key => input[key] !== (draft[key] || undefined))
+          || input.acceptanceCriteria !== deliveryFields(draft).acceptanceCriteria || JSON.stringify(dependencyIds(input)) !== JSON.stringify(dependencyIds(draft))
           || input.columnId !== draft.columnId || (input.stage ?? 'todo') !== (draft.stage ?? 'todo'))) return
         return {
-          ...metadata(draft), title: draft.title, brief: draft.brief, stage: draft.stage || 'todo', columnId: draft.columnId,
+          ...metadata(draft), acceptanceCriteria: draft.acceptanceCriteria, dependencyIds: draft.dependencyIds,
+          title: draft.title, brief: draft.brief, stage: draft.stage || 'todo', columnId: draft.columnId,
           workspaceId: draft.workspaceId || '', model: draft.model, retryInput: input || undefined,
         }
       } catch { /* Session storage may be unavailable; in-memory retry still works. */ }
+    }
+
+    function readBoardView() {
+      try {
+        const value = JSON.parse(window.localStorage?.getItem(BOARD_VIEW_KEY))
+        const toggles = group => Object.fromEntries(Object.entries(group || {}).filter(([key, on]) =>
+          (defaults.some(column => column.id === key) || key.length <= 36 && isSessionId(key)) && typeof on === 'boolean').slice(0, 100))
+        return { collapsed: toggles(value?.collapsed), showAllDone: toggles(value?.showAllDone), overview: value?.overview === true }
+      } catch { return { collapsed: {}, showAllDone: {}, overview: false } }
     }
 
     /**
@@ -1776,11 +3169,12 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       let snapshot = {
         deletion: undefined,
         status: 'loading', tasks: [], errorCode: undefined, hasLoaded: false, sync: 'connecting',
-        query: '', stages: {}, workspaceFilter: '', collapsed: {}, showAllDone: {}, detailId: undefined,
-        statuses: {}, launchForm: savedLaunch,
+        query: '', stages: {}, workspaceFilter: '', ...readBoardView(), detailId: undefined,
+        statuses: {}, launchForm: savedLaunch, quickCreating: false, unlockNotice: undefined, sortBy: 'manual',
         options: { status: 'idle', workspaces: [], groups: [], workspaceStatus: 'unavailable', modelStatus: 'unavailable', modelFailures: 0 },
         form: {
-          ...metadata(draft), open: !!draft, title: draft?.title || '', brief: draft?.brief || '', pending: false,
+          ...metadata(draft), acceptanceCriteria: draft?.acceptanceCriteria, dependencyIds: draft?.dependencyIds,
+          open: !!draft, title: draft?.title || '', brief: draft?.brief || '', pending: false,
           stage: draft?.stage || 'todo', columnId: draft?.columnId, workspaceId: draft?.workspaceId || '', model: draft?.model,
           retryInput: draft?.retryInput,
           errorCode: draft?.retryInput ? 'tasks/create-unknown' : undefined,
@@ -1791,6 +3185,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       let disposed = false
       let streamController
       let reconnectTimer
+      let unlockTimer
       let syncStarted = false
       let streamVersion = 0
       let retryDelay = 1000
@@ -1801,6 +3196,14 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       let suspended = false
       const listeners = new Set()
       const controllers = new Set()
+
+      function changeBoardView(changes) {
+        if (disposed) return
+        const { collapsed, showAllDone, overview } = snapshot
+        const next = { collapsed, showAllDone, overview, ...changes }
+        try { window.localStorage?.setItem(BOARD_VIEW_KEY, JSON.stringify(next)) } catch { /* Preferences are optional. */ }
+        publish({ ...snapshot, ...next })
+      }
 
       function changeLaunch(changes) {
         const launchForm = { ...snapshot.launchForm, ...changes }
@@ -1829,7 +3232,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         publish({ ...snapshot, detailId: undefined, launchForm: {
           taskId, open: true, pending: false, replaceActive: false,
           newConversation: mode,
-          includeImages: unfinished ? !!unfinished.input.includeImages : true,
+          includeFiles: unfinished ? !!unfinished.input.includeFiles : true,
           content: task.title + (task.brief ? '\n\n' + task.brief : ''),
           workspaceId: unfinished ? '' : task.workspaceId || '', model: unfinished ? undefined : task.model, agentPreset: '',
           ...(unfinished ? { ...unfinished.input, retryInput: unfinished.input, resume: true } : {}),
@@ -1898,7 +3301,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           if (receipt && !unfinishedLaunch(task)) {
             changeLaunch({ pending: false, checkReceipt: false, retryInput: undefined, open: false })
           } else if (receipt && !(form.errorCode === 'tasks/fork-unknown' && receipt.phase === 'prepared' && !receipt.sessionId)) {
-            changeLaunch({ ...receipt.input, includeImages: !!receipt.input.includeImages, retryInput: receipt.input, resume: true, pending: false, checkReceipt: false,
+            changeLaunch({ ...receipt.input, includeFiles: !!receipt.input.includeFiles, retryInput: receipt.input, resume: true, pending: false, checkReceipt: false,
               errorCode: unknownFork(receipt) ? 'tasks/fork-unknown' : undefined })
           } else if (form.errorCode === 'tasks/fork-unknown') {
             // A known-unknown Fork must not become replayable when the receipt is absent.
@@ -1914,7 +3317,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       async function launchTask() {
         const form = snapshot.launchForm
         if (!form || form.pending || !writable()) return
-        if (!form.retryInput && form.includeImages && imageJobs(form.taskId).some(job => job.image)) return
+        if (!form.retryInput && form.includeFiles && imageJobs(form.taskId).length) return
         const task = snapshot.tasks.find(row => row.id === form.taskId)
         if (!task || form.checkReceipt || form.errorCode === 'tasks/fork-unknown' || unknownFork(receiptFor(task, form))) return
         const source = form.forkFromSessionId
@@ -1926,7 +3329,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           taskId: task.id, expectedRevision: task.revision,
           requestId: Array.from(window.crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join(''),
           content: form.content, replaceActive: replacing,
-          ...(form.includeImages && task.imageCount ? { includeImages: true } : {}),
+          ...(form.includeFiles && (task.fileCount || task.imageCount) ? { includeFiles: true } : {}),
           ...(source ? { forkFromSessionId: source } : form.workspaceId ? { workspaceId: form.workspaceId } : {}),
           ...(form.model ? { model: form.model } : {}),
           ...(!source && form.agentPreset ? { agentPreset: form.agentPreset } : {}),
@@ -1943,7 +3346,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
               changeLaunch({ pending: false, retryInput: undefined, open: false })
               return
             }
-            const knownRejection = ['tasks/revision-conflict', 'tasks/workspace-unavailable', 'tasks/model-unavailable', 'tasks/preset-unavailable', 'tasks/session-busy', 'tasks/session-exists', 'tasks/bad-request'].includes(result.error.code)
+            const knownRejection = ['tasks/revision-conflict', 'tasks/workspace-unavailable', 'tasks/model-unavailable', 'tasks/preset-unavailable', 'tasks/session-busy', 'tasks/session-exists', 'tasks/bad-request', 'tasks/dependencies-blocked', 'tasks/delivery-pending'].includes(result.error.code)
             const saved = snapshot.tasks.find(row => row.id === task.id)?.launch
             const persisted = saved?.input.requestId === input.requestId
             const forkRejected = ['tasks/fork-unavailable', 'tasks/fork-source-changed'].includes(result.error.code)
@@ -1963,11 +3366,13 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
 
       function saveDraft(form) {
         try {
-          if (!form.title && !form.brief && !form.retryInput && !form.workspaceId && !form.model && !metaKeys.some(key => form[key])) {
+          if (!form.title && !form.brief && !form.retryInput && !form.workspaceId && !form.model
+            && !metaKeys.some(key => form[key]) && !form.acceptanceCriteria && !dependencyIds(form).length) {
             window.sessionStorage.removeItem(DRAFT_KEY)
           } else {
             window.sessionStorage.setItem(DRAFT_KEY, JSON.stringify({
-              ...metadata(form), title: form.title, brief: form.brief, retryInput: form.retryInput,
+              ...metadata(form), acceptanceCriteria: form.acceptanceCriteria, dependencyIds: form.dependencyIds,
+              title: form.title, brief: form.brief, retryInput: form.retryInput,
               stage: form.stage, columnId: form.columnId, workspaceId: form.workspaceId, model: form.model,
             }))
           }
@@ -2043,7 +3448,8 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         if (next.detailId && (previous.editor !== next.editor || previous.detailId !== next.detailId)) storeDetail(next.detailId, next.editor)
         snapshot = next
         const changedTasks = previous.tasks !== next.tasks
-        if (previous.query !== next.query || changedTasks && next.query) scheduleSearch()
+        const resetSearch = previous.query !== next.query || previous.storeId !== next.storeId
+        if (resetSearch || changedTasks && next.query) scheduleSearch(resetSearch)
         if (next.detailId !== previous.detailId) {
           historyVersion++
           historyQueued = false
@@ -2067,16 +3473,22 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         }
       }
 
-      function scheduleSearch() {
+      function scheduleSearch(reset = false) {
         clearTimeout(searchTimer)
         const version = ++searchVersion, query = snapshot.query.trim()
-        snapshot = { ...snapshot, matches: undefined, searchError: false }
-        if (!query || !snapshot.tasks.some(task => task.commentCount)) return
+        const hasComments = !!query && snapshot.tasks.some(task => task.commentCount)
+        // A same-query refresh must not hide existing comment-only results while it waits.
+        if (reset || !hasComments || snapshot.searchError) snapshot = { ...snapshot, matches: reset || !hasComments ? undefined : snapshot.matches, searchError: false }
+        if (!hasComments) return
         searchTimer = setTimeout(async () => {
           try {
             const result = await call('comment-matches', { query })
             if (!result.ok) throw new Error('Search failed')
-            if (!disposed && version === searchVersion) publish({ ...snapshot, matches: result.value.matches })
+            if (!disposed && version === searchVersion) {
+              const matches = result.value.matches, previous = snapshot.matches
+              if (!previous || Object.keys(previous).length !== Object.keys(matches).length
+                || Object.entries(matches).some(([id, snippet]) => previous[id] !== snippet)) publish({ ...snapshot, matches })
+            }
           } catch { if (!disposed && version === searchVersion) publish({ ...snapshot, searchError: true }) }
         }, 180)
       }
@@ -2232,11 +3644,9 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         rememberCommit(result, task.id, task)
         // A replayed creation can return an existing record while another card
         // mutation is in flight; responses may arrive out of commit order.
-        if (current && current.revision > task.revision) return snapshot.tasks
+        if (current && current.revision >= task.revision) return snapshot.tasks
         if (!snapshot.hasLoaded) return snapshot.tasks
-        const tasks = snapshot.tasks.filter(previous => previous.id !== task.id)
-        tasks.push(task)
-        return tasks
+        return current ? snapshot.tasks.map(previous => previous === current ? task : previous) : [...snapshot.tasks, task]
       }
 
       function removeTask(taskId, result) {
@@ -2258,6 +3668,13 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       function blockUncertain(code) {
         if (code !== 'tasks/persistence-unknown') return
         publish({ ...snapshot, status: 'error', tasks: [], hasLoaded: false, errorCode: code })
+      }
+
+      function normalizeStatus(taskId, nextStatus, prevStatuses) {
+        if (!nextStatus || nextStatus.status !== 'running') return nextStatus
+        const prev = prevStatuses?.[taskId]
+        const since = nextStatus.since ?? (prev?.sessionId === nextStatus.sessionId && prev?.status === 'running' ? prev.since : undefined) ?? new Date().toISOString()
+        return since === nextStatus.since ? nextStatus : { ...nextStatus, since }
       }
 
       function receiveEvent(event, baseline, sequence) {
@@ -2282,8 +3699,9 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           }
           const board = snapshot.board && currentStreamId === event.streamId && snapshot.board.revision > event.board?.revision ? snapshot.board : event.board
           currentStreamId = event.streamId
-          const statuses = event.statuses ?? {}
-          if (!statuses || typeof statuses !== 'object' || Array.isArray(statuses) || !Object.values(statuses).every(isStatus)) throw new TypeError('Invalid task statuses')
+          const rawStatuses = event.statuses ?? {}
+          if (!rawStatuses || typeof rawStatuses !== 'object' || Array.isArray(rawStatuses) || !Object.values(rawStatuses).every(isStatus)) throw new TypeError('Invalid task statuses')
+          const statuses = Object.fromEntries(Object.entries(rawStatuses).map(([id, value]) => [id, normalizeStatus(id, value, snapshot.statuses)]))
           publish({ ...snapshot, board, storeId: event.streamId, tasks: [...tasks.values()], statuses, hasLoaded: true, status: 'ready', errorCode: undefined, sync: 'live' })
           if (snapshot.detailId && !tasks.has(snapshot.detailId)) removeTask(snapshot.detailId)
           if (snapshot.launchForm && !tasks.has(snapshot.launchForm.taskId)) removeTask(snapshot.launchForm.taskId)
@@ -2298,13 +3716,17 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           if (event.type === 'upsert' && isTask(event.task)) {
             streamVersion++
             const pending = pendingCommits.get(event.task.id)
-            if (!pending || pending.streamId !== event.streamId || pending.sequence <= event.sequence) publish({ ...snapshot, tasks: upsert(event.task), sync: 'live' })
+            if (!pending || pending.streamId !== event.streamId || pending.sequence <= event.sequence) {
+              const tasks = upsert(event.task)
+              if (tasks !== snapshot.tasks || snapshot.sync !== 'live') publish({ ...snapshot, tasks, sync: 'live' })
+            }
             if ((event.task.workspaceId || event.task.model) && snapshot.options.status !== 'ready') void loadOptions()
           } else if (event.type === 'remove' && typeof event.taskId === 'string' && Number.isSafeInteger(event.revision)) {
             streamVersion++
             removeTask(event.taskId)
           } else if (event.type === 'status' && typeof event.taskId === 'string' && isStatus(event.status)) {
-            publish({ ...snapshot, statuses: { ...snapshot.statuses, [event.taskId]: event.status } })
+            const nextStatus = normalizeStatus(event.taskId, event.status, snapshot.statuses)
+            publish({ ...snapshot, statuses: { ...snapshot.statuses, [event.taskId]: nextStatus } })
           } else if (event.type === 'unavailable' && event.code === 'tasks/persistence-unknown') {
             streamVersion++
             blockUncertain(event.code)
@@ -2462,7 +3884,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           // getRandomValues also works in an HTTP GUI without a secure context.
           requestId: Array.from(window.crypto.getRandomValues(new Uint8Array(16)),
             byte => byte.toString(16).padStart(2, '0')).join(''),
-          ...metadata(form), title: form.title.trim(), brief: form.brief,
+          ...metadata(form), ...deliveryFields(form), title: form.title.trim(), brief: form.brief,
           stage: form.stage,
           ...(form.columnId && (!snapshot.board || snapshot.board.columns.some(column => column.id === form.columnId)) ? { columnId: form.columnId } : {}),
           ...(form.workspaceId ? { workspaceId: form.workspaceId } : {}),
@@ -2489,16 +3911,74 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           saveDraft(nextForm)
           const queued = imageJobs('draft')
           publish({ ...snapshot, tasks: upsert(task, result), form: nextForm, ...(queued.length ? {
-            detailId: task.id, editor: undefined, imageJobs: { ...snapshot.imageJobs, draft: [], [task.id]: queued } } : {}) })
+            detailId: task.id, detailView: 'detailTab', editor: undefined, imageJobs: { ...snapshot.imageJobs, draft: [], [task.id]: queued } } : {}) })
           if (queued.length) void runUploads(task.id)
         } catch {
           if (!disposed) changeForm({ pending: false, retryInput: input, errorCode: 'tasks/create-unknown' })
         }
       }
 
+      function activeWorkspaceScope() {
+        return snapshot.workspaceFilter && snapshot.workspaceFilter !== 'ungrouped'
+          && (snapshot.options.workspaceStatus !== 'ready' || snapshot.options.workspaces.some(row => row.id === snapshot.workspaceFilter))
+          ? snapshot.workspaceFilter : ''
+      }
+
+      function notifyUnlocked(wasDone, nextTasks, updated) {
+        const unlocked = newlyUnlockedTasks(wasDone, nextTasks, updated)
+        if (!unlocked.length) return undefined
+        clearTimeout(unlockTimer)
+        const notice = { id: newRequestId(), sourceTitle: updated.title, tasks: unlocked.map(row => ({ id: row.id, title: row.title })) }
+        unlockTimer = setTimeout(() => {
+          if (!disposed && snapshot.unlockNotice?.id === notice.id) publish({ ...snapshot, unlockNotice: undefined })
+        }, 8000)
+        return notice
+      }
+
+      function dismissUnlockNotice() {
+        clearTimeout(unlockTimer)
+        if (!disposed && snapshot.unlockNotice) publish({ ...snapshot, unlockNotice: undefined })
+      }
+
+      async function quickCreate({ title, stage = 'todo', columnId } = {}) {
+        const trimmed = typeof title === 'string' ? title.trim() : ''
+        if (!trimmed) return { ok: false, errorCode: 'tasks/title-required' }
+        if (!writable() || snapshot.quickCreating || snapshot.boardBusy) return { ok: false, errorCode: 'tasks/create-failed' }
+        const scopedWorkspace = activeWorkspaceScope()
+        const input = {
+          requestId: newRequestId(),
+          title: trimmed,
+          brief: '',
+          stage,
+          ...(columnId && (!snapshot.board || snapshot.board.columns.some(column => column.id === columnId)) ? { columnId } : {}),
+          ...(scopedWorkspace ? { workspaceId: scopedWorkspace } : {}),
+        }
+        publish({ ...snapshot, quickCreating: true })
+        const streamAtRequest = currentStreamId
+        try {
+          const result = await call('create', input)
+          if (disposed) return { ok: false, errorCode: 'tasks/create-failed' }
+          if (streamAtRequest && currentStreamId !== streamAtRequest) throw new Error('Task store changed during creation')
+          if (!result.ok) {
+            const code = result.error.code
+            publish({ ...snapshot, quickCreating: false })
+            blockUncertain(code)
+            return { ok: false, errorCode: code }
+          }
+          const task = result.value?.task
+          if (!isTask(task)) throw new TypeError('Invalid created task')
+          publish({ ...snapshot, tasks: upsert(task, result), quickCreating: false })
+          return { ok: true, task }
+        } catch {
+          if (!disposed) publish({ ...snapshot, quickCreating: false })
+          return { ok: false, errorCode: 'tasks/create-unknown' }
+        }
+      }
+
       async function boardWrite(operation, input) {
         if (!snapshot.board || snapshot.boardBusy || !writable() || snapshot.sync !== 'live') return
         const host = currentStreamId
+        const wasDone = operation === 'move' && snapshot.tasks.find(row => row.id === input?.taskId)?.stage === 'done'
         publish({ ...snapshot, boardBusy: true, boardError: undefined })
         try {
           const result = await call(operation, input)
@@ -2506,8 +3986,11 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           if (!result.ok) {
             publish({ ...snapshot, boardError: result.error.code })
             blockUncertain(result.error.code)
-          } else if (operation === 'move' && isTask(result.value?.task)) publish({ ...snapshot, tasks: upsert(result.value.task, result) })
-          else if (result.value?.board?.revision >= snapshot.board.revision) publish({ ...snapshot, board: result.value.board })
+          } else if (operation === 'move' && isTask(result.value?.task)) {
+            const nextTasks = upsert(result.value.task, result)
+            const unlockNotice = notifyUnlocked(wasDone, nextTasks, result.value.task)
+            publish({ ...snapshot, tasks: nextTasks, ...(unlockNotice ? { unlockNotice } : {}) })
+          } else if (result.value?.board?.revision >= snapshot.board.revision) publish({ ...snapshot, board: result.value.board })
           return result
         } catch { if (!disposed) { publish({ ...snapshot, boardError: 'tasks/unknown' }); streamController?.abort() } }
         finally { if (!disposed) publish({ ...snapshot, boardBusy: false }) }
@@ -2517,6 +4000,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         if (!writable() || !Object.hasOwn(STAGES, stage) || snapshot.stages[taskId]) return
         const task = snapshot.tasks.find(task => task.id === taskId)
         if (!task || task.stage === stage) return
+        const wasDone = task.stage === 'done'
         const row = { pending: true, stage, errorCode: undefined }
         const updateRow = changes => publish({ ...snapshot, stages: { ...snapshot.stages, [taskId]: { ...row, ...changes } } })
         updateRow({})
@@ -2535,7 +4019,9 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
             || updated.revision <= task.revision) throw new TypeError('Invalid updated task')
           const stages = { ...snapshot.stages }
           delete stages[taskId]
-          publish({ ...snapshot, tasks: upsert(updated, result), stages })
+          const nextTasks = upsert(updated, result)
+          const unlockNotice = notifyUnlocked(wasDone, nextTasks, updated)
+          publish({ ...snapshot, tasks: nextTasks, stages, ...(unlockNotice ? { unlockNotice } : {}) })
         } catch {
           if (!disposed) updateRow({ pending: false, errorCode: 'tasks/stage-unknown' })
         }
@@ -2543,7 +4029,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
 
       function editDetails(field, value) {
         const task = snapshot.tasks.find(row => row.id === snapshot.detailId)
-        if (!task || disposed || !['title', 'brief', ...metaKeys, ...preferenceKeys].includes(field) || snapshot.editor?.retryInput) return
+        if (!task || disposed || !['title', 'brief', ...metaKeys, ...preferenceKeys, ...checklistKeys].includes(field) || snapshot.editor?.retryInput) return
         const base = snapshot.editor || { ...editableValues(task), baseEditable: editableValues(task), revision: task.revision,
           createdAt: task.createdAt, storeId: snapshot.storeId }
         const editor = { ...base, [field]: value, errorCode: undefined }
@@ -2583,6 +4069,41 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         }
       }
 
+      async function mutateDelivery(taskId, operation, decision, feedback) {
+        const task = snapshot.tasks.find(row => row.id === taskId)
+        const review = operation === 'review-delivery'
+        if (!task?.delivery || !writable() || writing() || snapshot.editor
+          || (review ? task.delivery.status !== 'pending' : task.delivery.status !== 'returned' || task.delivery.continuedAt)) return
+        const wasDone = task.stage === 'done'
+        const text = feedback?.trim()
+        if (decision === 'return' && !text) return
+        const previous = snapshot.deliveryMutation
+        const replay = previous?.uncertain && previous.operation === operation && previous.input.taskId === taskId
+          && previous.input.deliveryId === task.delivery.id && previous.input.decision === decision && previous.input.feedback === text
+        const input = replay ? previous.input : { taskId, deliveryId: task.delivery.id, expectedRevision: task.revision,
+          ...(review ? { requestId: newRequestId(), decision, ...(text ? { feedback: text } : {}) } : {}) }
+        const host = currentStreamId
+        const progress = { operation, input }
+        const publishProgress = changes => publish({ ...snapshot, deliveryMutation: { ...progress, ...changes } })
+        publishProgress({ pending: true })
+        try {
+          const result = await call(operation, input)
+          if (disposed) return
+          if (host && host !== currentStreamId) throw new Error('Task store changed')
+          if (!result.ok) {
+            const errorCode = result.error.code
+            publishProgress({ errorCode, uncertain: ['tasks/persistence-unknown', 'gateway/cancelled'].includes(errorCode) })
+            blockUncertain(errorCode)
+            return
+          }
+          const updated = result.value?.task
+          if (!isTask(updated) || updated.id !== taskId) throw new TypeError('Invalid delivery result')
+          const nextTasks = upsert(updated, result)
+          const unlockNotice = notifyUnlocked(wasDone, nextTasks, updated)
+          publish({ ...snapshot, tasks: nextTasks, deliveryMutation: undefined, ...(unlockNotice ? { unlockNotice } : {}) })
+        } catch { if (!disposed) publishProgress({ errorCode: 'tasks/delivery-unknown', uncertain: true }) }
+      }
+
       async function deleteTask() {
         const deletion = snapshot.deletion
         if (!deletion || writing() || !writable()) return
@@ -2605,6 +4126,29 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         }
       }
 
+      async function deleteTaskById(taskId, expectedRevision) {
+        if (!writable()) return { ok: false, code: 'tasks/not-writable' }
+        const task = snapshot.tasks.find(row => row.id === taskId)
+        const rev = Number.isSafeInteger(expectedRevision) ? expectedRevision : task?.revision
+        if (!Number.isSafeInteger(rev)) return { ok: false, code: 'tasks/not-found' }
+        const host = currentStreamId
+        try {
+          const result = await call('delete', { taskId, expectedRevision: rev })
+          if (disposed) return { ok: false, code: 'tasks/disposed' }
+          if (host && host !== currentStreamId) return { ok: false, code: 'tasks/delete-unknown' }
+          if (!result.ok) {
+            if (result.error.code === 'tasks/not-found') { removeTask(taskId); return { ok: true } }
+            blockUncertain(result.error.code)
+            return { ok: false, code: result.error.code }
+          }
+          if (result.value?.taskId !== taskId || !Number.isSafeInteger(result.value.revision)) return { ok: false, code: 'tasks/delete-unknown' }
+          removeTask(taskId, result)
+          return { ok: true }
+        } catch {
+          return { ok: false, code: 'tasks/delete-unknown' }
+        }
+      }
+
       return {
         getSnapshot: () => snapshot,
         subscribe(listener) {
@@ -2615,14 +4159,15 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         refresh,
         startSync,
         create,
+        quickCreate,
+        dismissUnlockNotice,
         setStage,
         move(input) { return boardWrite('move', input) },
         editColumns(input) { return boardWrite('edit-columns', input) },
         editLabels(input) { return boardWrite('edit-labels', input) },
         loadHistory, postComment,
         queueFiles, queueImages: queueFiles,
-        getFiles(taskId) { return call('files', taskId ? { taskId } : {}) },
-        getImages(taskId, launchRequestId) { return call('images', { ...(taskId ? { taskId } : {}), ...(launchRequestId !== undefined ? { launchRequestId } : {}) }) },
+        getFiles(taskId, launchRequestId) { return call('files', { ...(taskId ? { taskId } : {}), ...(launchRequestId !== undefined ? { launchRequestId } : {}) }) },
         retryImage(key, id) { setJobs(key, imageJobs(key).map(row => row.id === id && row.state !== 'sending' ? { ...row, state: 'queued' } : row)); void runUploads(key) },
         discardImage(key, id) { setJobs(key, imageJobs(key).filter(row => row.id !== id || row.state === 'sending')) },
         async removeFile(input) {
@@ -2634,11 +4179,13 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         },
         editComment(taskId, text) { if (!snapshot.comments?.[taskId]?.requestId) changeComment(taskId, { text }) },
         setFilter(key, value) { publish({ ...snapshot, filters: { ...snapshot.filters, [key]: value } }) },
-        clearFilters() { publish({ ...snapshot, filters: {} }) },
+        clearFilters() { publish({ ...snapshot, filters: {}, sortBy: 'manual' }) },
+        setSortBy(sortBy) { if (!disposed && SORT_MODES.includes(sortBy)) publish({ ...snapshot, sortBy }) },
         retrySearch() { scheduleSearch(); publish(snapshot) },
         showColumns(managing) { publish({ ...snapshot, managing, boardError: undefined }) },
         mcpAccess(action) { return call('mcp-access', { action }) },
         deleteTask,
+        deleteTaskById,
         openDelete(taskId) {
           if (disposed || writing()) return
           const task = snapshot.tasks.find(row => row.id === taskId)
@@ -2655,9 +4202,21 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         loadOptions,
         setQuery(query) { if (!disposed) publish({ ...snapshot, query }) },
         setWorkspaceFilter(workspaceFilter) { if (!disposed) publish({ ...snapshot, workspaceFilter }) },
-        toggleColumn(stage) { if (!disposed) publish({ ...snapshot, collapsed: { ...snapshot.collapsed, [stage]: !snapshot.collapsed[stage] } }) },
-        toggleDone(columnId = 'stage:done') { if (!disposed) publish({ ...snapshot, showAllDone: { ...snapshot.showAllDone, [columnId]: !snapshot.showAllDone[columnId] } }) },
+        toggleColumn(columnId, next) {
+          const key = Object.hasOwn(STAGES, columnId) ? 'stage:' + columnId : columnId
+          changeBoardView({ collapsed: { ...snapshot.collapsed, [key]: next ?? !snapshot.collapsed[key] } })
+        },
+        toggleDone(columnId = 'stage:done') { changeBoardView({ showAllDone: { ...snapshot.showAllDone, [columnId]: !snapshot.showAllDone[columnId] } }) },
+        toggleOverview() { changeBoardView({ overview: !snapshot.overview }) },
         editDetails, saveDetails,
+        discardDetails() {
+          if (disposed || !snapshot.detailId || !snapshot.editor || snapshot.editor.pending || snapshot.editor.retryInput) return
+          const taskId = snapshot.detailId
+          publish({ ...snapshot, editor: undefined })
+          storeDetail(taskId)
+        },
+        reviewDelivery(taskId, decision, feedback) { return mutateDelivery(taskId, 'review-delivery', decision, feedback) },
+        continueDelivery(taskId) { return mutateDelivery(taskId, 'continue-delivery') },
         async reloadDetails() {
           const editor = snapshot.editor, taskId = snapshot.detailId
           if (!editor || editor.pending || editor.retryInput) return
@@ -2665,17 +4224,25 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           if (!disposed && snapshot.status === 'ready' && snapshot.detailId === taskId && snapshot.editor
             && !snapshot.editor.retryInput && sameEditable(snapshot.editor, editor)) publish({ ...snapshot, editor: undefined })
         },
-        openDetails(detailId) {
-          if (disposed || snapshot.editor?.pending || detailId === snapshot.detailId) return
-          publish({ ...snapshot, detailId, editor: readDetail(detailId) })
+        openDetails(detailId, view = 'detailTab') {
+          if (disposed || snapshot.editor?.pending || snapshot.deliveryMutation?.pending || !DETAIL_VIEWS.includes(view)) return
+          const same = detailId === snapshot.detailId
+          if (same && view === snapshot.detailView) return
+          publish({ ...snapshot, detailId, detailView: view, editor: same ? snapshot.editor : readDetail(detailId) })
+          if (view === 'activity' && !snapshot.activity) void loadHistory()
           if (snapshot.options.status !== 'ready') void loadOptions()
+        },
+        setDetailView(view) {
+          if (disposed || !snapshot.detailId || !DETAIL_VIEWS.includes(view) || view === snapshot.detailView) return
+          publish({ ...snapshot, detailView: view })
+          if (view === 'activity' && !snapshot.activity) void loadHistory()
         },
         openLinkedTask(sessionId, detailId, selectPanel) {
           if (disposed || writing() || snapshot.restore?.pending || !isSessionId(sessionId)
             || !snapshot.tasks.some(task => task.id === detailId && linksSession(task, sessionId))) return false
           try { selectPanel() } catch { return false } // The panel may be unloading.
           // Hide other task dialogs without losing their drafts or retry receipts.
-          publish({ ...snapshot, detailId, editor: detailId === snapshot.detailId ? snapshot.editor : readDetail(detailId),
+          publish({ ...snapshot, detailId, detailView: 'detailTab', editor: detailId === snapshot.detailId ? snapshot.editor : readDetail(detailId),
             deletion: undefined, restore: undefined, managing: undefined, navigationError: undefined,
             form: { ...snapshot.form, open: false },
             launchForm: snapshot.launchForm?.open ? { ...snapshot.launchForm, open: false, suspended: true } : snapshot.launchForm,
@@ -2689,8 +4256,11 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           publish({ ...snapshot, detailId: undefined, editor: undefined })
           if (taskId && !retain) storeDetail(taskId)
         },
-        openForm(stage = 'todo', columnId) {
-          changeForm({ open: true, ...(!snapshot.form.title && !snapshot.form.retryInput ? { stage, columnId } : {}) })
+        openForm(stage = 'todo', columnId, initialTitle) {
+          const emptyDraft = !snapshot.form.title && !snapshot.form.retryInput
+          const scopedWorkspace = activeWorkspaceScope()
+          const prefillTitle = typeof initialTitle === 'string' ? initialTitle.trim() : ''
+          changeForm({ open: true, ...(emptyDraft ? { stage, columnId, ...(prefillTitle ? { title: prefillTitle } : {}), ...(!snapshot.form.workspaceId && scopedWorkspace ? { workspaceId: scopedWorkspace } : {}) } : {}) })
           if (snapshot.options.status !== 'ready') void loadOptions()
         },
         closeForm() { changeForm({ open: false }) },
@@ -2700,7 +4270,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
             if (column) changeForm({ columnId: value, stage: column.stage, errorCode: undefined })
             return
           }
-          if (!snapshot.form.pending && !snapshot.form.retryInput && ['title', 'brief', 'workspaceId', 'model', 'stage', ...metaKeys].includes(field)) {
+          if (!snapshot.form.pending && !snapshot.form.retryInput && ['title', 'brief', 'workspaceId', 'model', 'stage', ...metaKeys, ...checklistKeys].includes(field)) {
             changeForm({ [field]: value, errorCode: undefined })
           }
         },
@@ -2709,6 +4279,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           pendingCommits.clear()
           clearTimeout(reconnectTimer)
           clearTimeout(searchTimer)
+          clearTimeout(unlockTimer)
           streamController?.abort()
           window.removeEventListener?.('pagehide', pauseSync)
           window.removeEventListener?.('pageshow', resumeSync)
@@ -2789,6 +4360,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
     function failureText(t, code, fallback) {
       const launchCodes = {
         'tasks/prompt-image-unavailable': 'promptImageUnavailable', 'tasks/prompt-image-rejected': 'promptImageRejected',
+        'tasks/prompt-file-unavailable': 'promptFileUnavailable', 'tasks/prompt-file-rejected': 'promptFileRejected',
         'tasks/launch-failed': 'launchFailed', 'tasks/launch-unknown': 'launchUnknown',
         'tasks/session-unavailable': 'sessionUnavailable', 'tasks/session-busy': 'sessionBusy',
         'tasks/session-exists': 'sessionExists', 'tasks/launch-pending': 'launchPending',
@@ -2811,6 +4383,10 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         'tasks/workspace-unavailable': 'workspaceRejected',
         'tasks/model-unavailable': 'modelRejected',
         'tasks/options-unavailable': 'workspaceUnavailable',
+        'tasks/dependencies-blocked': 'dependencyBlocked', 'tasks/dependency-cycle': 'dependencyCycle',
+        'tasks/dependency-unavailable': 'dependencyUnavailable', 'tasks/dependency-missing': 'dependencyUnavailable',
+        'tasks/delivery-pending': 'deliveryActionRequired', 'tasks/delivery-review-required': 'deliveryActionRequired',
+        'tasks/delivery-not-pending': 'deliveryMutationFailed', 'tasks/delivery-not-returned': 'deliveryMutationFailed',
       }
       return t(keys[code] || fallback)
     }
@@ -2843,6 +4419,9 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         more: 'M5 12h.01M12 12h.01M19 12h.01',
         alert: 'M21 12a9 9 0 1 1-18 0 9 9 0 1 1 18 0ZM12 7v6m0 4h.01',
         question: 'M21 12a9 9 0 1 1-18 0 9 9 0 1 1 18 0ZM9 9a3 3 0 1 1 4.6 2.5c-1 .6-1.6 1.2-1.6 2.5m0 3h.01',
+        flag: 'M5 4v17M5 4h11l-2.5 4.5L16 13H5',
+        externalLink: 'M14 4h6v6M10 14 20 4M18 13v6H5V6h6',
+        columns: 'M4 5h16v14H4zM9 5v14M15 5v14',
       }
       return h('span', { className: 'dsh-tasks-icon', 'aria-hidden': true },
         name === 'board' ? h(PanelIcon, { size }) : h('svg', {
@@ -2922,7 +4501,106 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       }
     }
 
-    function TaskDrawer({ t, title, intro, heading, meta, menu, onClose, children, editorInk = false }) {
+    function useAutoGrowTextArea(ref, active, value) {
+      const nativeSizing = window.CSS?.supports('field-sizing', 'content')
+      const resize = node => {
+        if (!node?.clientWidth) return
+        node.style.height = '0px'
+        node.style.height = (node.scrollHeight + node.offsetHeight - node.clientHeight) + 'px'
+      }
+      React.useLayoutEffect(() => {
+        if (!nativeSizing && active) resize(ref.current)
+      }, [nativeSizing, active, value])
+      React.useLayoutEffect(() => {
+        const node = ref.current
+        if (nativeSizing || !active || !node || !window.ResizeObserver) return
+        // In the fallback, remeasure on line-wrap changes, not on our own height changes.
+        let width = node.clientWidth
+        const observer = new window.ResizeObserver(() => {
+          if (node.clientWidth === width) return
+          width = node.clientWidth
+          resize(node)
+        })
+        observer.observe(node)
+        return () => observer.disconnect()
+      }, [nativeSizing, active])
+    }
+
+    function TaskMarkdown({ t, text, className = '' }) {
+      if (!text || !text.trim()) return null
+      const rendered = MarkdownText ? h(MarkdownText, {
+        text,
+        labels: { code: { copyLabel: t('copyCode'), copiedLabel: t('copiedCode') }, footnotes: t('footnotes') },
+      }) : null
+      const content = rendered
+        ? (MarkdownDelegateProvider ? h(MarkdownDelegateProvider, taskMarkdownDelegate, rendered) : rendered)
+        : h('pre', { className: 'dsh-tasks-markdown-fallback' }, text)
+      return h('div', { className: ('dsh-tasks-description-markdown ' + className).trim() }, content)
+    }
+
+    const shortSessionId = id => id.replace(/^session-/i, '').slice(0, 8)
+    function SessionChip({ t, sessionId, disabled, onOpen }) {
+      return h(TaskButton, {
+        type: 'button', ink: false, className: 'dsh-tasks-session-chip',
+        disabled, title: t('openSession') + ': ' + sessionId,
+        'aria-label': t('openSession') + ': ' + sessionId,
+        onClick: () => onOpen(sessionId),
+      }, h(Icon, { name: 'link', size: 12 }), h('span', null, t('sessionChip') + ' #' + shortSessionId(sessionId)), h(Icon, { name: 'externalLink', size: 11 }))
+    }
+
+    function ColumnPillSelect({ t, columns, current, disabled, blockDone = false, labelPrefix, onSelect }) {
+      const label = current ? columnLabel(t, current) : t('unknownColumn')
+      const style = current?.color ? { '--dsh-tasks-col-color': current.color } : undefined
+      const pill = h('span', { className: 'dsh-tasks-stage-pill', 'data-stage': current?.stage || 'todo', style },
+        h('span', { className: 'dsh-tasks-stage-dot', 'aria-hidden': true }),
+        h('span', { className: 'dsh-tasks-stage-pill-label' }, label))
+      if (disabled) return h('span', { className: 'dsh-tasks-stage-dropdown is-disabled', title: label }, pill)
+      return h(Dropdown, { className: 'dsh-tasks-stage-dropdown' },
+        h('summary', { className: 'dsh-tasks-stage-pill', 'data-stage': current?.stage || 'todo', style, 'aria-label': labelPrefix + ': ' + label, title: labelPrefix },
+          h('span', { className: 'dsh-tasks-stage-dot', 'aria-hidden': true }),
+          h('span', { className: 'dsh-tasks-stage-pill-label' }, label),
+          h(Icon, { name: 'chevronDown', size: 12 })),
+        h('div', { className: 'dsh-tasks-menu dsh-tasks-command-list', popover: 'manual', 'data-task-ink': 'overlay' },
+          h('div', { className: 'dsh-tasks-menu-label' }, labelPrefix),
+          columns.map(col => {
+            const active = col.id === current?.id
+            const lockedDone = blockDone && col.stage === 'done'
+            return h(TaskButton, {
+              key: col.id, type: 'button', ink: false, className: 'dsh-tasks-command',
+              disabled: active || lockedDone, 'data-current': active || undefined,
+              onClick(event) {
+                const details = event.currentTarget.closest('details')
+                if (details) { details.open = false; details.querySelector('summary')?.focus() }
+                onSelect(col)
+              },
+            },
+              h('span', { className: 'dsh-tasks-stage-dot', 'data-stage': col.stage, style: col.color ? { '--dsh-tasks-col-color': col.color } : undefined, 'aria-hidden': true }),
+              h('span', { className: 'dsh-tasks-command-label' }, columnLabel(t, col)),
+              active ? h(Icon, { name: 'check', size: 12 }) : null)
+          })))
+    }
+
+    function DetailHeaderTitle({ t, value, disabled, onChange }) {
+      const ref = React.useRef(null)
+      useAutoGrowTextArea(ref, true, value)
+      return h('div', { className: 'dsh-tasks-detail-title-wrap' },
+        h('textarea', {
+          ref, name: 'title', rows: 1, maxLength: 200, disabled, value, required: true,
+          className: 'dsh-tasks-detail-title-field',
+          'aria-label': t('taskTitle'),
+          placeholder: t('titlePlaceholder'),
+          onChange: event => onChange(event.target.value.replace(/[\r\n]+/g, ' ')),
+          onKeyDown(event) {
+            if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing) {
+              event.preventDefault()
+              event.currentTarget.blur()
+            }
+          },
+        }),
+        !disabled ? h('span', { className: 'dsh-tasks-detail-title-affordance', 'aria-hidden': true }, h(Icon, { name: 'edit', size: 13 })) : null)
+    }
+
+    function TaskDrawer({ t, title, intro, heading, headingNode, meta, menu, onClose, onKeyDown, children, editorInk = false }) {
       const panel = React.useRef(null)
       const drag = React.useRef(null)
       const [viewport, setViewport] = React.useState(() => window.innerWidth || 1280)
@@ -2946,9 +4624,10 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         setWidth(next)
         if (persist) try { window.localStorage.setItem(widthKey, String(next)) } catch {}
       }
+      const isDetail = !!(heading || headingNode)
       return createPortal(h('div', { className: 'dsh-tasks-root dsh-tasks-drawer-layer', style: { background: 'rgb(24 23 21 / 22%)' },
         onClick: event => { if (event.target === event.currentTarget) onClose() } },
-        h('section', { ref: panel, role: 'dialog', 'aria-modal': true, 'aria-label': title, tabIndex: -1,
+        h('section', { ref: panel, role: 'dialog', 'aria-modal': true, 'aria-label': title, tabIndex: -1, onKeyDown,
           className: 'dsh-tasks-dialog dsh-tasks-drawer' + (editorInk ? ' dsh-tasks-editor-drawer' : ''), style: { '--drawer-width': width + 'px' } },
           viewport > 600 ? h('div', { className: 'dsh-tasks-drawer-width', role: 'separator', tabIndex: 0, 'aria-orientation': 'vertical',
             'aria-valuemin': 420, 'aria-valuemax': maxWidth, 'aria-valuenow': Math.min(width, maxWidth), title: t('drawerWidth'), 'aria-label': t('drawerWidth'),
@@ -2960,9 +4639,9 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
             onLostPointerCapture() { if (drag.current) { setWidth(drag.current.width); drag.current = null } },
             onKeyDown(event) { const next = { ArrowLeft: Math.min(maxWidth, width) + 20, ArrowRight: Math.min(maxWidth, width) - 20, Home: 420, End: maxWidth }[event.key]
               if (next !== undefined) { event.preventDefault(); resize(next, true) } } }) : null,
-           h(TaskEditorInkContext.Provider, { value: editorInk }, h('header', { className: 'dsh-tasks-dialog-head' + (heading ? ' dsh-tasks-detail-head' : '') },
+           h(TaskEditorInkContext.Provider, { value: editorInk }, h('header', { className: 'dsh-tasks-dialog-head' + (isDetail ? ' dsh-tasks-detail-head' : '') },
             h('span', { className: 'dsh-tasks-icon dsh-tasks-logo' }, h(Icon, { name: 'board', size: 19 })),
-             h('div', { className: heading ? 'dsh-tasks-detail-heading' : undefined }, h('h2', { title: heading }, heading || title), meta || (intro ? h('p', null, intro) : null)),
+             h('div', { className: isDetail ? 'dsh-tasks-detail-heading' : undefined }, headingNode || h('h2', { title: heading }, heading || title), meta || (intro ? h('p', null, intro) : null)),
              menu,
             h(TaskButton, { className: 'dsh-tasks-icon-button', 'aria-label': t('close'), onClick: onClose }, h(Icon, { name: 'close' }))), children))), window.document.body)
     }
@@ -2986,8 +4665,8 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       return Math.floor(minutes / 1440) + ' ' + t('daysAgo')
     }
 
-    function SelectField({ t, title, name, value, choices, empty, change, onCreate, maxLength, paperInk }) {
-      return h('label', null, title, h(PaperSelect, { t, onCreate, createByValue: name === 'priority', maxLength, paperInk, className: 'dsh-tasks-stage', name, 'aria-label': title, value: value || '', onChange: event => change(event.target.value) },
+    function SelectField({ t, icon, title, name, value, choices, empty, change, onCreate, maxLength, paperInk }) {
+      return h('label', null, icon ? fieldTitle(icon, title) : title, h(PaperSelect, { t, onCreate, createByValue: name === 'priority', maxLength, paperInk, className: 'dsh-tasks-stage', name, 'aria-label': title, value: value || '', onChange: event => change(event.target.value) },
         h('option', { value: '' }, empty), choices.map(([id, label]) => h('option', { key: id, value: id }, label))))
     }
     function Properties({ t, board, values, change, priorities, createLabel, filter = false, paperInk = false }) {
@@ -2999,33 +4678,79 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         if (added) change('labelId', added.id)
         else setLabelError(result?.error?.code === 'tasks/revision-conflict' ? 'boardConflict' : 'boardFailed')
       })
-      const select = (key, choices, onCreate, maxLength) => h(SelectField, { t, onCreate, maxLength, paperInk, title: t(key), name: key, value: values[key], choices,
-        empty: t(filter ? 'any' : 'none'), change: value => change(key, value) })
+      const select = (key, icon, choices, onCreate, maxLength) => h(SelectField, {
+        t, icon: filter ? undefined : icon, onCreate, maxLength, paperInk, title: t(key), name: key, value: values[key], choices,
+        empty: t(filter ? 'any' : 'none'), change: value => change(key, value),
+      })
       const priorityChoices = [...priorities]
       if (values.priority && !priorities.has(values.priority)) priorityChoices.push([values.priority, values.priority])
       return h('div', { className: 'dsh-tasks-fields dsh-tasks-properties' },
-        select('labelId', (board?.labels ?? []).map(row => [row.id, row.name]), addLabel, 80),
-        select('priority', priorityChoices, filter ? undefined : value => change('priority', value), 32),
-        filter ? select('dueDate', Object.keys(dueIcons).map(key => [key, t(key)])) : h(TaskDatePicker, { t, value: values.dueDate, change, paperInk }),
+        select('labelId', 'tag', (board?.labels ?? []).map(row => [row.id, row.name]), addLabel, 80),
+        select('priority', 'flag', priorityChoices, filter ? undefined : value => change('priority', value), 32),
+        filter ? select('dueDate', undefined, Object.keys(dueIcons).map(key => [key, t(key)]))
+          : h(TaskDatePicker, { t, value: values.dueDate, change, paperInk, label: fieldTitle('calendar', t('dueDate')) }),
         labelError ? h('span', { role: 'alert' }, t(labelError)) : null)
     }
-    function TaskDescription({ t, brief, change, draft, locked, revision, dirty }) {
+    const taskMarkdownDelegate = {
+      openExternalLink(value) {
+        const href = evidenceUrl(value), url = href && URL.parse(href)
+        if (!url) return
+        // Tavlo's desktop shell cancels top-level off-loopback navigation and opens
+        // it in the system browser. Use that path instead of relying on a WebView popup.
+        const localHost = /^(localhost|127\..+|\[::1\])$/i
+        const webview = window.__TAURI_INTERNALS__?.metadata?.currentWebview
+        if (window.isTauri === true && webview?.label === 'main' && localHost.test(window.location.hostname)
+          && !localHost.test(url.hostname) && url.hostname !== 'tauri.localhost') window.location.assign(href)
+        else window.open(href, '_blank', 'noopener,noreferrer')
+      },
+    }
+
+    function parseCardBrief(rawBrief) {
+      if (!rawBrief || typeof rawBrief !== 'string') return { brief: '', externalLink: null }
+      let text = rawBrief.trim()
+      let externalLink = null
+
+      const linkMatch = text.match(/^(?:\[([^\]]+)\]\((?:<([^>]+)>|([^)]+))\)|<([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^>]+)>)/)
+      if (linkMatch) {
+        const rawLabel = (linkMatch[1] || '').trim()
+        const url = (linkMatch[2] || linkMatch[3] || linkMatch[4] || '').trim()
+        if (/^https?:\/\//i.test(url)) {
+          let label = rawLabel
+          if (/tapd\.cn/i.test(url) || /tapd/i.test(rawLabel)) {
+            label = 'TAPD'
+          } else if (/github\.com/i.test(url) || /github/i.test(rawLabel)) {
+            label = 'GitHub'
+          } else if (/jira/i.test(url) || /jira/i.test(rawLabel)) {
+            label = 'Jira'
+          } else if (!label || /^https?:\/\//i.test(label)) {
+            label = 'Link'
+          }
+          externalLink = { label, url }
+          text = text.slice(linkMatch[0].length).trim()
+        }
+      }
+
+      text = text.replace(/^[ ]{4}/gm, '').trim()
+      return { brief: text, externalLink }
+    }
+
+    function TaskDescription({ t, brief, change, draft, locked, revision, resetSignal = 0, dirty }) {
       const [editing, setEditing] = React.useState(!!draft)
       const id = React.useId()
       const input = React.useRef(null), lastSelection = React.useRef(null), restoreFocus = React.useRef(false)
-      const lastRevision = React.useRef(revision)
+      const lastRevision = React.useRef(revision), lastReset = React.useRef(resetSignal)
       const hasDescription = !!brief.trim()
-      const nativeSizing = window.CSS?.supports('field-sizing', 'content')
 
       React.useLayoutEffect(() => {
-        // A saved/reloaded revision returns detail to reading, but unsubmitted edits (including a revert) do not.
-        if (!draft && !dirty && revision !== lastRevision.current) {
+        // A saved/reloaded/discarded revision returns detail to reading, but typing back to base does not.
+        if (!draft && !dirty && (revision !== lastRevision.current || resetSignal !== lastReset.current)) {
           lastRevision.current = revision
+          lastReset.current = resetSignal
           lastSelection.current = null
           restoreFocus.current = false
           setEditing(false)
         }
-      }, [draft, dirty, revision])
+      }, [draft, dirty, revision, resetSignal])
       React.useLayoutEffect(() => {
         if (editing && restoreFocus.current && input.current) {
           restoreFocus.current = false
@@ -3033,28 +4758,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           if (lastSelection.current) input.current.setSelectionRange(...lastSelection.current)
         }
       }, [editing])
-
-      function resize(node) {
-        if (!node?.clientWidth) return
-        node.style.height = '0px'
-        node.style.height = (node.scrollHeight + node.offsetHeight - node.clientHeight) + 'px'
-      }
-      React.useLayoutEffect(() => {
-        if (!nativeSizing && editing) resize(input.current)
-      }, [nativeSizing, editing, brief])
-      React.useLayoutEffect(() => {
-        const node = input.current
-        if (nativeSizing || !editing || !node || !window.ResizeObserver) return
-        // In the fallback, remeasure on line-wrap changes, not on our own height changes.
-        let width = node.clientWidth
-        const observer = new window.ResizeObserver(() => {
-          if (node.clientWidth === width) return
-          width = node.clientWidth
-          resize(node)
-        })
-        observer.observe(node)
-        return () => observer.disconnect()
-      }, [nativeSizing, editing])
+      useAutoGrowTextArea(input, editing, brief)
 
       function switchMode(next) {
         if (locked || next === editing || (draft && !next && !hasDescription)) return
@@ -3067,20 +4771,90 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       }
       const action = (label, next, props) => h('button', { className: 'dsh-tasks-description-action', type: 'button',
         'aria-controls': id + '-body', onClick: () => switchMode(next), ...props }, t(label))
-      const title = fieldTitle('chart', t('taskBrief'))
+      const title = fieldTitle('file', t('taskBrief'))
+      const markdown = !editing && hasDescription && MarkdownText ? h(MarkdownText, { text: brief,
+        labels: { code: { copyLabel: t('copyCode'), copiedLabel: t('copiedCode') }, footnotes: t('footnotes') } }) : null
       return h('div', { className: 'dsh-tasks-description' },
         h('div', { className: 'dsh-tasks-description-head' },
           editing ? h('label', { htmlFor: id }, title) : title,
-          draft ? h('div', { className: 'dsh-tasks-description-actions', role: 'group', 'aria-label': t('descriptionMode') },
+          draft ? h('div', { className: 'dsh-tasks-description-actions dsh-tasks-segmented', role: 'group', 'aria-label': t('descriptionMode') },
             action('descriptionEdit', true, { 'aria-pressed': editing, disabled: locked }),
             action('descriptionPreview', false, { 'aria-pressed': !editing, disabled: locked || !hasDescription }))
             : action(editing ? 'descriptionPreview' : 'editDescription', !editing, { disabled: locked })),
         h('div', { className: 'dsh-tasks-description-body', id: id + '-body' },
           editing ? h(TaskTextArea, { className: 'dsh-tasks-description-input', inputRef: input, id, name: 'brief', paperInk: true,
             value: brief, rows: 2, placeholder: t('briefPlaceholder'), onChange: event => change('brief', event.target.value) })
-            : hasDescription ? h('div', { className: 'dsh-tasks-description-markdown' }, MarkdownText ? h(MarkdownText, { text: brief,
-              labels: { code: { copyLabel: t('copyCode'), copiedLabel: t('copiedCode') }, footnotes: t('footnotes') } }) : h('pre', null, brief))
+            : hasDescription ? h('div', {
+              className: 'dsh-tasks-description-markdown' + (!locked ? ' is-editable' : ''),
+              onClick(event) {
+                if (locked || event.target.closest('a, button, input, summary, [role="button"]') || window.getSelection()?.toString()) return
+                switchMode(true)
+              },
+            }, markdown
+              ? MarkdownDelegateProvider ? h(MarkdownDelegateProvider, taskMarkdownDelegate, markdown) : markdown
+              : h('pre', null, brief))
               : h('p', { className: 'dsh-tasks-description-empty' }, t('noDescription'))))
+    }
+
+    function TaskAcceptanceCriteria({ t, value, change, draft, locked, revision, resetSignal = 0, dirty }) {
+      const hasContent = !!(value || '').trim()
+      const hasValue = !!(value || '')
+      const [open, setOpen] = React.useState(false)
+      const [editing, setEditing] = React.useState(!!draft)
+      const id = React.useId()
+      const input = React.useRef(null), restoreFocus = React.useRef(false)
+      const lastRevision = React.useRef(revision), lastReset = React.useRef(resetSignal)
+      const expanded = open || hasValue
+      const showInput = expanded && (draft || editing || !hasContent)
+
+      React.useLayoutEffect(() => {
+        if (!draft && !dirty && (revision !== lastRevision.current || resetSignal !== lastReset.current)) {
+          lastRevision.current = revision
+          lastReset.current = resetSignal
+          restoreFocus.current = false
+          setEditing(false)
+          setOpen(false)
+        }
+      }, [draft, dirty, revision, resetSignal])
+      React.useLayoutEffect(() => {
+        if (showInput && restoreFocus.current && input.current) {
+          restoreFocus.current = false
+          input.current.focus({ preventScroll: true })
+        }
+      }, [showInput])
+      useAutoGrowTextArea(input, showInput, value)
+
+      if (!expanded) {
+        return h('div', { className: 'dsh-tasks-disclosure-row' },
+          h(TaskButton, {
+            className: 'dsh-tasks-disclosure-trigger', ink: false, disabled: locked,
+            onClick: () => { restoreFocus.current = true; setOpen(true); setEditing(true) },
+          }, h(Icon, { name: 'check', size: 14 }), h('span', null, t('addCriteria')), h(Icon, { name: 'plus', size: 13 })))
+      }
+      const title = fieldTitle('check', t('acceptanceCriteria'))
+      const markdown = !showInput && hasContent && MarkdownText ? h(MarkdownText, { text: value,
+        labels: { code: { copyLabel: t('copyCode'), copiedLabel: t('copiedCode') }, footnotes: t('footnotes') } }) : null
+      return h('div', { className: 'dsh-tasks-criteria' },
+        h('div', { className: 'dsh-tasks-description-head' },
+          showInput ? h('label', { htmlFor: id }, title) : title,
+          !draft && (showInput ? hasContent : true) ? h('button', {
+            type: 'button', className: 'dsh-tasks-description-action', disabled: locked,
+            onClick: () => { restoreFocus.current = !showInput; setEditing(!showInput) },
+          }, t(showInput ? 'descriptionPreview' : 'editCriteria')) : null),
+        showInput ? h(TaskTextArea, {
+          className: 'dsh-tasks-description-input', inputRef: input, id, name: 'acceptanceCriteria', paperInk: true,
+          rows: 2, maxLength: 4000, value: value || '', placeholder: t('criteriaPlaceholder'),
+          onChange: event => change('acceptanceCriteria', event.target.value),
+        }) : h('div', {
+          className: 'dsh-tasks-description-markdown dsh-tasks-criteria-read' + (!locked ? ' is-editable' : ''),
+          onClick(event) {
+            if (locked || event.target.closest('a, button, input, summary, [role="button"]') || window.getSelection()?.toString()) return
+            restoreFocus.current = true
+            setEditing(true)
+          },
+        }, markdown
+          ? MarkdownDelegateProvider ? h(MarkdownDelegateProvider, taskMarkdownDelegate, markdown) : markdown
+          : h('pre', null, value)))
     }
     function TaskImagePreview({ t, src, alt, onClose, native }) {
       // The Host lightbox portals to body, below a native modal's top layer.
@@ -3136,16 +4910,15 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       const refresh = () => reload(value => value + 1)
       React.useEffect(() => {
         let current = true
-        const request = readOnly ? actions.getImages(task?.id, launchRequestId) : actions.getFiles(task?.id)
-        request.then(result => {
+        actions.getFiles(task?.id, launchRequestId).then(result => {
           if (!current) return
-          const files = readOnly ? result.value?.images : result.value?.files
+          const files = result.value?.files
           const valid = result.ok && Array.isArray(files)
             && (launchRequestId === undefined || result.value.launchRequestId === launchRequestId)
           setGallery({ ...(valid ? { ...result.value, files } : { error: true }), scope })
         }).catch(() => { if (current) setGallery({ error: true, scope }) })
         return () => { current = false }
-      }, [actions, scope, task?.revision, epoch, readOnly])
+      }, [actions, scope, task?.revision, epoch])
       const limits = gallery?.limits
       const add = files => { if (!readOnly && !locked && limits) setWarning(actions.queueFiles(key, files, limits) || '') }
       React.useEffect(() => {
@@ -3171,14 +4944,14 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           setWarning(error.code === 'tasks/revision-conflict' ? 'boardConflict' : 'fileFailed'); refresh()
         }
       }
-      const url = (id, download = false) => 'api/dsh-plugin-tasks/' + (readOnly ? 'image' : 'file') + '?' + new URLSearchParams({ taskId: key, attachmentId: id,
+      const url = (id, download = false) => 'api/dsh-plugin-tasks/file?' + new URLSearchParams({ taskId: key, attachmentId: id,
         ...(launchRequestId !== undefined ? { launchRequestId } : {}), ...(download ? { download: '1' } : {}) })
       const files = gallery?.files ?? []
       const empty = !files.length && !jobs.length
       const pending = jobs.filter(job => job.state !== 'failed').length
       const count = task ? files.length : jobs.length
       const full = !readOnly && !!limits && (task ? files.length + jobs.length : jobs.length) >= limits.maxFiles
-      const title = t(readOnly ? 'images' : 'files')
+      const title = t('files')
       const previewed = preview?.scope === scope && files.find(row => row.attachmentId === preview.id)
       return h('section', { ref: section, className: 'dsh-tasks-images', 'aria-label': title },
         h('div', { className: 'dsh-tasks-image-head' },
@@ -3190,13 +4963,18 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         limits && !readOnly ? h('input', { hidden: true, type: 'file', ref: picker, multiple: true,
           onChange(event) { add(event.target.files); event.target.value = '' } }) : null,
         !gallery ? h('p', { role: 'status' }, t('loading')) : gallery.error || !limits ? h('p', { role: gallery.error ? 'alert' : undefined },
-          t(gallery.error ? readOnly ? 'imagePreviewFailed' : 'fileListFailed' : readOnly ? 'imageUnavailable' : 'filesUnavailable'), ' ',
+          t(gallery.error ? 'fileListFailed' : 'filesUnavailable'), ' ',
           h(TaskButton, { className: 'dsh-tasks-image-action', ink: false, onClick: refresh }, t('retry'))) : !readOnly ?
-          h('div', { className: 'dsh-tasks-image-add', 'data-empty': empty ? '' : undefined },
+          h('div', {
+            className: 'dsh-tasks-image-add', 'data-empty': empty ? '' : undefined,
+            'data-task-ink': empty ? 'empty' : undefined,
+            onClick: empty && !locked && !full ? () => picker.current?.click() : undefined,
+          },
+            empty ? taskInk('empty') : null,
             h('p', { className: 'dsh-tasks-field-hint' }, t('fileHint'), ' · ≤ ', attachmentSize(limits.maxFileBytes))) : null,
         !readOnly && pending > 0 ? h('p', { className: 'dsh-tasks-field-hint' }, t('imageLocalHint')) : null,
-        readOnly && gallery && !gallery.error && empty ? h('p', null, t('noImages')) : null,
-        launchRequestId ? h('p', { className: 'dsh-tasks-field-hint' }, t('launchImageSnapshot')) : null,
+        readOnly && gallery && !gallery.error && empty ? h('p', null, t('noLaunchFiles')) : null,
+        launchRequestId ? h('p', { className: 'dsh-tasks-field-hint' }, t('launchFileSnapshot')) : null,
         warning ? h('p', { role: 'alert' }, t(warning)) : null,
         !empty ? h('ul', { className: 'dsh-tasks-image-grid', role: 'list' }, files.map((file, index) => {
           const label = file.name ?? t('imageNumber').replace('{number}', index + 1)
@@ -3204,10 +4982,10 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           return h(AttachmentRow, { key: 'attachment:' + file.attachmentId, label, status: attachmentStatus(file.bytes, t('imageUploaded')),
             thumb: image ? h(TaskButton, { className: 'dsh-tasks-thumb', disabled: !readOnly && !ImageLightbox, 'aria-label': label, onClick: () => setPreview({ id: file.attachmentId, scope }) },
               h('img', { src: url(file.attachmentId), loading: 'lazy', alt: '' })) : fileIcon(),
-            controls: !readOnly ? h(React.Fragment, null,
+            controls: h(React.Fragment, null,
               h('a', { className: 'dsh-tasks-image-action dsh-tasks-file-download', href: url(file.attachmentId, true), download: '',
                 'aria-label': t('downloadFile') + ': ' + label, title: t('downloadFile') }, h(Icon, { name: 'download', size: 17 })),
-              h(RemoveFileButton, { t, name: label, disabled: locked || !!removal?.pending, onClick: () => remove(file.attachmentId) })) : null,
+              !readOnly ? h(RemoveFileButton, { t, name: label, disabled: locked || !!removal?.pending, onClick: () => remove(file.attachmentId) }) : null),
           })
         }), jobs.map(job => h(PendingFile, { key: 'job:' + job.id, job, taskId: task?.id, t, actions, locked, readOnly }))) : null,
         previewed ? h(TaskImagePreview, { t, src: url(previewed.attachmentId), alt: previewed.name ?? t('images'), native: readOnly, onClose: closePreview }) : null)
@@ -3223,14 +5001,14 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       const selected = modelKey(values.model)
       const listed = options.groups.some(group => group.id === values.model?.provider && group.models.some(row => row.id === values.model.model))
       return h('div', { className: 'dsh-tasks-bindings' },
-        h('label', null, fieldTitle('folder', t('workspace'), t('optional')),
+        h('label', null, fieldTitle('folder', t('workspace')),
           h(PaperSelect, { t, paperInk: true, className: 'dsh-tasks-stage', name: 'workspaceId', 'aria-label': t('workspace'), value: values.workspaceId || '',
             onChange: event => change('workspaceId', event.target.value) },
           h('option', { value: '' }, t('ungrouped')),
           values.workspaceId && !workspace ? h('option', { value: values.workspaceId }, workspaceLabel(t, values, options)) : null,
           options.workspaces.map(row => h('option', { key: row.id, value: row.id }, row.title))),
-          workspace ? h('p', { className: 'dsh-tasks-field-hint', style: { overflowWrap: 'anywhere' } }, workspace.path) : null),
-        h('label', null, fieldTitle('spark', t('model'), t('optional')),
+          workspace ? h('p', { className: 'dsh-tasks-field-hint dsh-tasks-workspace-path', title: workspace.path }, workspace.path) : null),
+        h('label', null, fieldTitle('spark', t('model')),
           h(PaperSelect, { t, paperInk: true, className: 'dsh-tasks-stage', name: 'model', 'aria-label': t('model'), value: selected,
             onChange(event) {
               const key = event.target.value
@@ -3255,29 +5033,126 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         h(TaskButton, { className: 'dsh-tasks-retry', type: 'button', onClick: reload }, t('reloadOptions')))
     }
 
-    function TaskEditorFields({ t, values, change, options, board, priorities, createLabel, locked, autofocus, draft, revision, dirty, children }) {
+    function TaskPrerequisites({ t, values, change, byId, actions, options, locked, dirty }) {
+      const selected = dependencyIds(values)
+      const [open, setOpen] = React.useState(false)
+      const [focusSelect, setFocusSelect] = React.useState(false)
+      const rootRef = React.useRef(null)
+      React.useLayoutEffect(() => {
+        if (open && focusSelect) {
+          setFocusSelect(false)
+          rootRef.current?.querySelector('[role="combobox"]')?.focus({ preventScroll: true })
+        }
+      }, [open, focusSelect])
+      const candidates = byId ? [...byId.values()]
+        .filter(task => task.id !== values.id && !selected.includes(task.id))
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) : []
+      if (!selected.length && !open) {
+        if (!candidates.length) return null
+        return h('div', { className: 'dsh-tasks-disclosure-row' },
+          h(TaskButton, {
+            className: 'dsh-tasks-disclosure-trigger', ink: false, disabled: locked,
+            onClick: () => { setOpen(true); setFocusSelect(true) },
+          }, h(Icon, { name: 'link', size: 14 }), h('span', null, t('addPrerequisites')), h(Icon, { name: 'plus', size: 13 })))
+      }
+      return h('div', { ref: rootRef, className: 'dsh-tasks-prerequisites' },
+        h('strong', null, fieldTitle('link', t('dependencyIds'))),
+        selected.length ? h('ul', null, selected.map(id => {
+          const task = byId?.get(id)
+          return h('li', { key: id },
+            task && !dirty ? h(TaskButton, { className: 'dsh-tasks-dependency-link', ink: false, onClick: () => actions.openDetails(id) }, task.title)
+              : h('span', { title: task ? undefined : id }, task?.title ?? t('dependencyMissing')),
+            task ? h('small', null, t(task.delivery?.status === 'pending' ? 'reviewPending' : STAGES[task.stage])) : null,
+            h(TaskButton, { className: 'dsh-tasks-icon-button', ink: false, 'aria-label': t('removeDependency') + ': ' + (task?.title ?? id), disabled: locked,
+              onClick: () => change('dependencyIds', selected.filter(value => value !== id)) }, h(Icon, { name: 'close', size: 13 })))
+        })) : null,
+        selected.length < 20 && candidates.length ? h('div', { className: 'dsh-tasks-dependency-chooser' },
+          h(PaperSelect, {
+            t, paperInk: true, maxVisible: 40, disabled: locked,
+            'aria-label': t('addDependency'), name: 'dependency', value: '',
+            onChange(event) {
+              const id = event.target.value
+              if (id && candidates.some(task => task.id === id)) change('dependencyIds', [...selected, id])
+            },
+          }, h('option', { value: '' }, t('addDependency')),
+          candidates.map(task => h('option', { key: task.id, value: task.id }, task.title + ' · ' + workspaceLabel(t, task, options))))) : null)
+    }
+
+    function TaskDependents({ t, taskId, stage, byId, actions, dirty }) {
+      const dependents = dependentsOf(taskId, byId)
+      if (!dependents.length) return null
+      const blocking = stage === 'done' ? 0 : dependents.filter(row => row.stage !== 'done').length
+      return h('div', { className: 'dsh-tasks-dependents' },
+        h('div', { className: 'dsh-tasks-dependents-head' },
+          h('strong', null, fieldTitle('link', t('dependentTasks'))),
+          blocking > 0 ? h('small', { className: 'dsh-tasks-dependents-badge' }, t('blockingCount').replace('{count}', String(blocking))) : null),
+        h('ul', null, dependents.map(row => {
+          const statusKey = row.stage === 'done'
+            ? (row.delivery?.status === 'accepted' ? 'reviewAccepted' : 'colDone')
+            : row.delivery?.status === 'pending' ? 'reviewPending'
+              : blockersOf(row, byId).length ? 'dependencyBlocked' : STAGES[row.stage]
+          return h('li', { key: row.id },
+            !dirty ? h(TaskButton, { className: 'dsh-tasks-dependency-link', ink: false, onClick: () => actions.openDetails(row.id) }, row.title)
+              : h('span', null, row.title),
+            h('small', null, t(statusKey)))
+        })))
+    }
+
+    function TaskEditorFields({ t, values, change, options, board, priorities, createLabel, locked, autofocus, draft, revision, resetSignal = 0, dirty, children, byId, actions, showTitle = true }) {
       return h(React.Fragment, null,
         h('fieldset', { className: 'dsh-tasks-fields dsh-tasks-task-fields', disabled: locked },
-          h('label', null, fieldTitle('edit', t('taskTitle')), h(TaskInput, {
-            name: 'title', paperInk: true, value: values.title, required: true, 'data-modal-autofocus': autofocus ? '' : undefined,
-            placeholder: draft ? t('titlePlaceholder') : undefined,
-            onChange: event => change('title', event.target.value),
-          })),
-          h(TaskDescription, { t, brief: values.brief ?? '', change, draft, locked, revision, dirty }),
-          board ? h(Properties, { t, board, priorities, createLabel, values, change, paperInk: true }) : null,
-          h(PreferenceFields, { t, values, options, change })),
+          showTitle ? h('label', null,
+            h('span', { className: 'dsh-tasks-field-title' }, h(Icon, { name: 'edit', size: 14 }), t('taskTitle'),
+              h('span', { className: 'dsh-tasks-required', 'aria-hidden': true }, '*')),
+            h(TaskInput, {
+              name: 'title', paperInk: true, value: values.title, required: true, 'data-modal-autofocus': autofocus ? '' : undefined,
+              placeholder: draft ? t('titlePlaceholder') : undefined,
+              onChange: event => change('title', event.target.value),
+            })) : null,
+          h(TaskDescription, { t, brief: values.brief ?? '', change, draft, locked, revision, resetSignal, dirty }),
+          h(TaskAcceptanceCriteria, { t, value: values.acceptanceCriteria || '', change, draft, locked, revision, resetSignal, dirty }),
+          h('section', { className: 'dsh-tasks-meta-card', 'aria-label': t('sectionProperties') },
+            h('div', { className: 'dsh-tasks-meta-card-head' }, t('sectionProperties')),
+            board ? h(Properties, { t, board, priorities, createLabel, values, change, paperInk: true }) : null,
+            h(PreferenceFields, { t, values, options, change })),
+          byId ? h(TaskPrerequisites, { t, values, change, byId, options, actions, locked, dirty: dirty || draft }) : null,
+          byId && !draft && values.id ? h(TaskDependents, { t, taskId: values.id, stage: values.stage, byId, actions, dirty }) : null),
         children)
     }
 
-    function CreateForm({ t, form, actions, writable, options, board, jobs, priorities, boardBusy }) {
+    function CreateForm({ t, form, actions, writable, options, board, jobs, priorities, boardBusy, byId }) {
       const locked = form.pending || !!form.retryInput || boardBusy
-      return h(TaskDrawer, { t, title: t('newTask'), intro: t('createIntro'), onClose: actions.closeForm, editorInk: true }, h('form', {
+      const columns = board?.columns?.length ? board.columns : defaults
+      const currentColumn = (form.columnId && columns.find(col => col.id === form.columnId))
+        || columns.find(col => col.stage === form.stage) || columns[0]
+      const meta = h('div', { className: 'dsh-tasks-detail-meta dsh-tasks-create-meta' },
+        h('span', { className: 'dsh-tasks-create-intro' }, t('createIntro')),
+        h(ColumnPillSelect, {
+          t, columns, current: currentColumn, disabled: locked || !writable,
+          labelPrefix: t('createColumn'),
+          onSelect(col) {
+            if (board?.columns?.length) actions.editForm('columnId', col.id)
+            else actions.editForm('stage', col.stage)
+          },
+        }))
+      const submitCreate = () => {
+        if (writable && !form.pending && !boardBusy && form.title.trim()) void actions.create()
+      }
+      return h(TaskDrawer, {
+        t, title: t('newTask'), intro: t('createIntro'), meta, onClose: actions.closeForm, editorInk: true,
+        onKeyDown(event) {
+          if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing) {
+            event.preventDefault()
+            submitCreate()
+          }
+        },
+      }, h('form', {
         className: 'dsh-tasks-form', 'aria-label': t('newTask'), 'aria-busy': form.pending,
         onSubmit(event) { event.preventDefault(); void actions.create() },
       },
       h('div', { className: 'dsh-tasks-dialog-body dsh-tasks-detail-panel' },
-      h(TaskEditorFields, { t, values: form, change: actions.editForm, options, board, priorities,
-        createLabel: actions.editLabels, locked, autofocus: !locked, draft: true },
+      h(TaskEditorFields, { t, values: form, change: actions.editForm, options, board, priorities, byId, actions,
+        createLabel: actions.editLabels, locked, autofocus: !locked, draft: true, showTitle: true },
         board ? h('fieldset', { className: 'dsh-tasks-attachment-fieldset', disabled: locked },
           h(TaskImages, { t, actions, jobs, locked: locked || !writable })) : null),
       h('input', { type: 'hidden', name: 'stage', value: form.stage }),
@@ -3299,32 +5174,91 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       )))
     }
 
-    function TaskCard({ t, task, row, actions, writable, writing, options, runtime, board, priorities, draggable, previous, next }) {
-      const feedbackId = 'dsh-tasks-feedback-' + task.id
-      const workspace = workspaceLabel(t, task, options)
-      const isOverdue = task.stage !== 'done' && task.dueDate && task.dueDate < todayLocal()
-      const drag = Dnd.useDraggable({ id: task.id, data: { task }, disabled: !draggable })
-      const drop = Dnd.useDroppable({ id: 'card:' + task.id, data: { columnId: taskColumn(task), taskId: task.id }, disabled: !draggable })
-      const startDrag = (event, listener) => {
-        const control = event.target.closest('button, a, details, input, select, textarea, [contenteditable="true"]')
-        if (control && !control.matches('.dsh-tasks-card-title, .dsh-tasks-grip')) return
-        if (event.button != null && event.button !== 0) return
-        listener?.(event)
-      }
+    function sameCardProps(previous, next) {
+      // A new task index alone doesn't change a card. Only its unfinished prerequisites are displayed.
+      for (const key of Object.keys(next)) if (key !== 'byId' && !Object.is(previous[key], next[key])) return false
+      if (previous.byId === next.byId) return true
+      return dependencyIds(next.task).every(id => {
+        const before = previous.byId.get(id), after = next.byId.get(id)
+        return before === after || before?.stage === after?.stage && (before?.stage === 'done' || before?.title === after?.title)
+      })
+    }
+
+    function startCardDrag(event, listener) {
+      const control = event.target.closest('button, a, details, input, select, textarea, [contenteditable="true"]')
+      if (control && !control.matches('.dsh-tasks-card-title, .dsh-tasks-grip')) return
+      if (event.button != null && event.button !== 0) return
+      listener?.(event)
+    }
+
+    function cardToneOf(task, runtime, byId) {
+      if (task.stage === 'done') return undefined
+      if (runtime === 'error') return 'danger'
+      if (runtime === 'approval' || runtime === 'question') return 'warn'
+      if (task.delivery?.status === 'pending') return 'action'
+      if (task.delivery?.status === 'returned' && !task.delivery.continuedAt) return 'warn'
+      if (!task.activeSessionId && blockersOf(task, byId).length) return 'blocked'
+      return undefined
+    }
+
+    const TaskCard = React.memo(function TaskCard(props) {
+      const { t, task, row, actions, draggable, gripVisible, selectMode, selected, onToggleSelect } = props
+      const canDrag = draggable && !selectMode
+      // Keep dnd-kit's frequently changing context above the memoized card contents.
+      const drag = Dnd.useDraggable({ id: task.id, data: { task }, disabled: !canDrag })
+      const drop = Dnd.useDroppable({ id: 'card:' + task.id, data: { columnId: taskColumn(task), taskId: task.id }, disabled: !canDrag })
+      const { setNodeRef: setDragRef, setActivatorNodeRef, attributes, isDragging } = drag
+      const { setNodeRef: setDropRef, isOver } = drop
+      const { onMouseDown, onTouchStart, onKeyDown } = drag.listeners ?? {}
+      const setNodeRef = React.useCallback(node => { setDragRef(node); setDropRef(node) }, [setDragRef, setDropRef])
+      const grip = React.useMemo(() => gripVisible && !selectMode ? h(TaskButton, { type: 'button', className: 'dsh-tasks-grip', elementRef: setActivatorNodeRef,
+        ...attributes, disabled: !canDrag, onKeyDown, 'aria-label': t('drag') + ': ' + task.title, title: t('drag') }, h(Icon, { name: 'grip', size: 13 })) : null,
+      [gripVisible, selectMode, canDrag, setActivatorNodeRef, attributes, onKeyDown, t, task.title])
       return h(PaperFrame, { seed: task.id, className: 'dsh-tasks-card', 'aria-busy': !!row?.pending, 'data-task-id': task.id, 'data-stage': task.stage,
-        elementRef: node => { drag.setNodeRef(node); drop.setNodeRef(node) }, 'data-dragging': drag.isDragging || undefined, 'data-drop': drop.isOver || undefined,
-        'data-draggable': draggable || undefined,
-        onMouseDown: draggable ? event => startDrag(event, drag.listeners?.onMouseDown) : undefined,
-        onTouchStart: draggable ? event => startDrag(event, drag.listeners?.onTouchStart) : undefined,
+        'data-card-tone': cardToneOf(task, props.runtime, props.byId),
+        'data-select-mode': selectMode || undefined, 'data-selected': selectMode && selected || undefined,
+        elementRef: setNodeRef, 'data-dragging': isDragging || undefined, 'data-drop': isOver || undefined,
+        'data-draggable': canDrag || undefined,
+        onMouseDown: canDrag ? event => startCardDrag(event, onMouseDown) : undefined,
+        onTouchStart: canDrag ? event => startCardDrag(event, onTouchStart) : undefined,
         onClick(event) {
           if (event.target.closest('button, details, input, textarea, select, a') || window.getSelection()?.toString()) return
+          if (selectMode) { onToggleSelect?.(task.id); return }
           event.currentTarget.querySelector('.dsh-tasks-card-title')?.focus({ preventScroll: true })
           actions.openDetails(task.id)
-        } },
+        } }, h(TaskCardContents, { ...props, draggable: canDrag, gripVisible: gripVisible && !selectMode, grip }))
+    }, sameCardProps)
+
+    const TaskCardContents = React.memo(function TaskCardContents({ t, task, row, actions, writable, writing, options, runtime, statusSince, nowTick, board, priorities, draggable, gripVisible, previousId, nextId, byId, today, grip, selectMode, selected, onToggleSelect }) {
+      const blockers = blockersOf(task, byId)
+      const review = task.delivery?.status === 'pending' || task.delivery?.status === 'returned' && !task.delivery.continuedAt
+      const unlinked = inProgressUnlinked(task)
+      const action = unfinishedLaunch(task) ? [t('resumeLaunch'), () => actions.openLaunch(task.id), !writable || writing, 'promote']
+        : task.stage === 'done' ? null
+          : review ? [t('reviewDelivery'), () => actions.openDetails(task.id, 'deliveryTab'), false, 'promote']
+            : task.activeSessionId ? [t('viewProgress'), () => actions.openSession(task.activeSessionId), false, 'neutral']
+              : blockers.length ? [t('inspectDependencies'), () => actions.openDetails(task.id), false, 'neutral']
+                : [t(unlinked ? 'createConversation' : 'launch'), () => actions.openLaunch(task.id), !writable || writing, 'promote']
+      const badge = task.stage === 'done' ? task.delivery?.status === 'accepted' ? 'reviewAccepted' : 'colDone'
+        : unfinishedLaunch(task) ? 'launchPending'
+          : review ? task.delivery.status === 'pending' ? 'reviewPending' : 'reviewReturned'
+            : !task.activeSessionId ? blockers.length ? 'dependencyBlocked' : unlinked ? 'unlinkedConversation' : 'dependencyReady' : runtime
+      const runningElapsed = badge === 'running' && statusSince ? formatElapsed(t, statusSince, nowTick) : ''
+      const feedbackId = 'dsh-tasks-feedback-' + task.id
+      const workspace = workspaceLabel(t, task, options)
+      const isOverdue = task.stage !== 'done' && task.dueDate && task.dueDate < today
+      const fileCount = task.fileCount ?? task.imageCount
+      const { brief: cardBrief, externalLink } = React.useMemo(() => parseCardBrief(task.brief), [task.brief])
+      return h(React.Fragment, null,
         h('div', { className: 'dsh-tasks-card-heading' },
-          draggable ? h(TaskButton, { type: 'button', className: 'dsh-tasks-grip', elementRef: drag.setActivatorNodeRef, ...drag.attributes, onKeyDown: drag.listeners?.onKeyDown,
-            'aria-label': t('drag') + ': ' + task.title, title: t('drag') }, h(Icon, { name: 'grip', size: 15 })) : null,
-          h(TaskButton, { type: 'button', className: 'dsh-tasks-card-title', title: task.title, onClick: () => actions.openDetails(task.id) }, task.title),
+          grip,
+          selectMode ? h('span', { className: 'dsh-tasks-card-select', 'aria-hidden': true }, selected ? h(Icon, { name: 'check', size: 11 }) : null) : null,
+          // The shared small Button has a fixed block size: a wrapped title needs its own intrinsic height.
+          h('button', { type: 'button', className: 'dsh-tasks-card-title', title: task.title,
+            'aria-pressed': selectMode ? !!selected : undefined,
+            onClick: () => selectMode ? onToggleSelect?.(task.id) : actions.openDetails(task.id) },
+          task.stage === 'done' ? h('span', { className: 'dsh-tasks-done-check', 'aria-hidden': true }, h(Icon, { name: 'check', size: 13 })) : null,
+          h('span', { className: 'dsh-tasks-card-title-text' }, task.title)),
           h(Dropdown, { className: 'dsh-tasks-card-actions', name: 'dsh-tasks-card-actions',
             onKeyDown(event) {
               if (event.key !== 'Escape') return
@@ -3342,9 +5276,14 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
                   actions.openLaunch(task.id, { newConversation: true })
                 },
               }, h(Icon, { name: 'plus', size: 14 }), t('newSession')) : null,
+              task.activeSessionId ? h(TaskButton, { className: 'dsh-tasks-command', onClick: () => actions.openSession(task.activeSessionId) },
+                h(Icon, { name: 'link', size: 14 }), t('openSession')) : null,
+              task.stage !== 'done' && !unfinishedLaunch(task) && !deliveryOpen(task) ? h(TaskButton, { className: 'dsh-tasks-command', disabled: !writable || writing || !!row,
+                onClick(event) { event.currentTarget.closest('details').open = false; void actions.setStage(task.id, 'done') } },
+              h(Icon, { name: 'check', size: 14 }), t('markDone')) : null,
               h('div', { className: 'dsh-tasks-menu-label' }, t('moveGroup')),
               (board?.columns || defaults).map(column => h(TaskButton, {
-                key: column.id, type: 'button', disabled: !writable || writing || !!row || taskColumn(task) === column.id,
+                key: column.id, type: 'button', disabled: !writable || writing || !!row || taskColumn(task) === column.id || column.stage === 'done' && deliveryOpen(task),
                 className: 'dsh-tasks-command', 'data-current': taskColumn(task) === column.id || undefined, title: t('manualStage'),
                 onClick(event) {
                   event.currentTarget.closest('details').removeAttribute('open')
@@ -3352,10 +5291,10 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
                   else void actions.setStage(task.id, column.stage)
                 },
               }, h(Icon, { name: taskColumn(task) === column.id ? 'check' : 'chevron', size: 12 }), t('moveTo') + ' ' + columnLabel(t, column))),
-              draggable && (previous || next) ? h('div', { className: 'dsh-tasks-command-group' }, h('div', { className: 'dsh-tasks-menu-label' }, t('reorder')),
-                [[previous, 'before', 'earlier'], [next, 'after', 'later']].map(([neighbor, side, label]) => h(TaskButton, {
-                key: side, className: 'dsh-tasks-command', disabled: !neighbor, onClick(event) { event.currentTarget.closest('details').open = false
-                  void actions.move({ taskId: task.id, expectedRevision: task.revision, columnId: taskColumn(task), anchor: { taskId: neighbor.id, side } }) },
+              gripVisible && (previousId || nextId) ? h('div', { className: 'dsh-tasks-command-group' }, h('div', { className: 'dsh-tasks-menu-label' }, t('reorder')),
+                [[previousId, 'before', 'earlier'], [nextId, 'after', 'later']].map(([neighborId, side, label]) => h(TaskButton, {
+                key: side, className: 'dsh-tasks-command', disabled: !draggable || !neighborId, onClick(event) { event.currentTarget.closest('details').open = false
+                  void actions.move({ taskId: task.id, expectedRevision: task.revision, columnId: taskColumn(task), anchor: { taskId: neighborId, side } }) },
               }, h(Icon, { name: side === 'before' ? 'up' : 'down', size: 14 }), t(label)))) : null,
               h(TaskButton, { className: 'dsh-tasks-command dsh-tasks-danger', disabled: !writable || writing,
                 onClick(event) { event.currentTarget.closest('details').removeAttribute('open'); actions.openDelete(task.id) },
@@ -3363,26 +5302,47 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
             ),
           ),
         ),
-        task.brief ? h('div', { className: 'dsh-tasks-card-brief', title: task.brief }, task.brief) : null,
+        cardBrief ? h('div', { className: 'dsh-tasks-card-brief', title: cardBrief }, cardBrief) : null,
         h('div', { className: 'dsh-tasks-card-meta dsh-tasks-card-properties' },
-          (board?.labels ?? []).filter(row => row.id === task.labelId).map(row => h(Tag, { key: row.id }, h('span', { title: row.name, style: { borderInlineStart: '4px solid ' + row.color, paddingInlineStart: 4 } }, row.name))),
-          task.priority ? h(Tag, { tone: task.priority === 'P0' ? 'warning' : 'neutral' },
-            h('span', { title: task.priority }, priorityLabel(priorities, task.priority))) : null,
-          task.dueDate ? h('span', { className: 'dsh-tasks-card-due', 'data-overdue': isOverdue || undefined }, h(Icon, { name: 'calendar', size: 12 }), h('span', null, t(isOverdue ? 'overdue' : 'dueDate') + ': ' + task.dueDate)) : null,
-          (task.fileCount ?? task.imageCount) ? h('span', { className: 'dsh-tasks-meta-count' }, t('files') + ': ' + (task.fileCount ?? task.imageCount)) : null,
-          task.commentCount ? h('span', { className: 'dsh-tasks-meta-count' }, t('comment') + ': ' + task.commentCount) : null),
+          (board?.labels ?? []).filter(row => row.id === task.labelId).map(row => h(Tag, { key: row.id, className: 'dsh-tasks-label-tag' }, h('span', { title: row.name, 'data-label-chip': '', style: { borderInlineStart: '4px solid ' + row.color, paddingInlineStart: 4 } }, row.name))),
+          task.priority ? h(Tag, { tone: task.priority === 'P0' ? 'warning' : 'neutral', className: 'dsh-tasks-priority-tag', 'data-priority': task.priority },
+            h('span', { title: task.priority, 'data-priority': task.priority }, priorityLabel(priorities, task.priority))) : null,
+          externalLink ? h('a', {
+            key: 'ext-link',
+            className: 'dsh-tasks-card-extlink',
+            href: externalLink.url,
+            title: externalLink.label + ': ' + externalLink.url,
+            target: '_blank',
+            rel: 'noopener noreferrer',
+            onClick(event) {
+              event.stopPropagation()
+              taskMarkdownDelegate.openExternalLink(externalLink.url)
+            }
+          }, h('span', null, externalLink.label), h('span', { className: 'dsh-tasks-extlink-arrow', 'aria-hidden': true }, '↗')) : null,
+          task.dueDate ? h('span', { className: 'dsh-tasks-card-due', 'data-overdue': isOverdue || undefined }, h(Icon, { name: 'calendar', size: 12 }), h('span', null, t(isOverdue ? 'overdue' : 'dueDate') + ': ' + task.dueDate)) : null),
         task.snippet ? h('p', { className: 'dsh-tasks-card-brief dsh-tasks-match-snippet', title: task.snippet }, t('comment') + ': ' + task.snippet) : null,
-        h('div', { className: 'dsh-tasks-card-context' },
-          h(StatusBadge, { status: task.stage === 'done' ? 'done' : runtime, label: t(task.stage === 'done' ? 'colDone' : runtime),
-            time: task.stage === 'done' ? task.completedAt && relativeTime(t, task.completedAt) : relativeTime(t, task.createdAt) }),
-          h('div', { className: 'dsh-tasks-card-meta' },
-            h(Icon, { name: 'folder', size: 12 }), h('span', { className: 'dsh-tasks-meta-workspace', title: workspace }, workspace),
-            task.model ? h('span', { className: 'dsh-tasks-meta-model', title: modelLabel(task, options) }, '· ' + modelLabel(task, options)) : null)),
-        h('div', { className: 'dsh-tasks-card-buttons' },
-          task.activeSessionId ? h(TaskButton, { type: 'button', className: 'dsh-tasks-retry', onClick: () => actions.openSession(task.activeSessionId) }, t('openSession')) : null,
-          unfinishedLaunch(task) || !task.activeSessionId && task.stage !== 'done' ? h(TaskButton, { type: 'button', className: 'dsh-tasks-retry', disabled: !writable || writing, onClick: () => actions.openLaunch(task.id) },
-            t(unfinishedLaunch(task) ? 'resumeLaunch' : 'launch')) : null,
-          task.stage !== 'done' && !unfinishedLaunch(task) ? h(TaskButton, { disabled: !writable || writing || !!row, onClick: () => actions.setStage(task.id, 'done') }, t('markDone')) : null),
+        blockers.length && task.stage !== 'done' ? h('div', { className: 'dsh-tasks-card-blockers', 'aria-label': t('dependencyBlocked') },
+          h(Icon, { name: 'link', size: 12 }), blockers.slice(0, 2).map(id => {
+            const prerequisite = byId.get(id)
+            return prerequisite ? h(TaskButton, { key: id, className: 'dsh-tasks-dependency-link', title: prerequisite.title,
+              onClick: () => actions.openDetails(id) }, h('span', { className: 'dsh-tasks-dependency-title' }, prerequisite.title)) : h('span', { key: id, className: 'dsh-tasks-dependency-title', title: id }, t('dependencyMissing'))
+          }), blockers.length > 2 ? h('span', { className: 'dsh-tasks-blocker-more' }, '+' + (blockers.length - 2)) : null) : null,
+        h('div', { className: 'dsh-tasks-card-footer' },
+          h('div', { className: 'dsh-tasks-card-context' },
+            h(StatusBadge, { status: task.stage === 'done' ? 'done' : badge, label: t(badge),
+              elapsed: runningElapsed || undefined,
+              time: task.stage === 'done' ? task.completedAt && relativeTime(t, task.completedAt) : undefined }),
+            h('div', { className: 'dsh-tasks-card-meta' },
+              h(Icon, { name: 'folder', size: 12 }), h('span', { className: 'dsh-tasks-meta-workspace', title: workspace }, workspace),
+              task.model ? h('span', { className: 'dsh-tasks-meta-model', title: modelLabel(task, options) }, '· ' + modelLabel(task, options)) : null),
+            fileCount || task.commentCount ? h('div', { className: 'dsh-tasks-card-counts' },
+              fileCount ? h('span', { className: 'dsh-tasks-meta-count', title: t('files') + ': ' + fileCount, 'aria-label': t('files') + ': ' + fileCount },
+                h(Icon, { name: 'paperclip', size: 11 }), h('span', null, String(fileCount))) : null,
+              task.commentCount ? h('span', { className: 'dsh-tasks-meta-count', title: t('comment') + ': ' + task.commentCount, 'aria-label': t('comment') + ': ' + task.commentCount },
+                h(Icon, { name: 'comment', size: 11 }), h('span', null, String(task.commentCount))) : null) : null),
+          action ? h('div', { className: 'dsh-tasks-card-buttons' }, h(TaskButton, {
+            className: 'dsh-tasks-retry dsh-tasks-card-action-btn', disabled: action[2], onClick: action[1], 'data-task-next-action': '', 'data-action-tone': action[3],
+          }, action[0])) : null),
         row?.pending ? h('p', { className: 'dsh-tasks-feedback', role: 'status' }, t('moving')) : null,
         row?.errorCode ? h('div', { className: 'dsh-tasks-feedback', id: feedbackId, role: 'alert' },
           h('p', null, failureText(t, row.errorCode, 'stageFailed')),
@@ -3393,12 +5353,43 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           }, t('refresh')),
         ) : null,
       )
-    }
+    }, sameCardProps)
+
+    const ColumnCards = React.memo(function ColumnCards({ tasks, stage, sortBy, recentOnly, empty, stages, statuses, selectMode, selectedIds, onToggleSelect, nowTick, ...props }) {
+      const visible = stage === 'done' && sortBy === 'manual'
+        ? [...tasks].sort((a, b) => (b.completedAt ?? b.updatedAt).localeCompare(a.completedAt ?? a.updatedAt)).slice(0, recentOnly ? DONE_PREVIEW : tasks.length)
+        : recentOnly ? [...tasks].sort((a, b) => (b.completedAt ?? b.updatedAt).localeCompare(a.completedAt ?? a.updatedAt)).slice(0, DONE_PREVIEW) : tasks
+      const renderCard = (task, index, list) => {
+        const entry = task.activeSessionId && statuses[task.id]?.sessionId === task.activeSessionId ? statuses[task.id] : undefined
+        return h(TaskCard, {
+          ...props, key: task.id, task, row: stages[task.id],
+          previousId: list[index - 1]?.id, nextId: list[index + 1]?.id,
+          runtime: entry ? entry.status : task.activeSessionId ? 'unknown' : 'notStarted',
+          statusSince: entry?.since, nowTick: entry?.status === 'running' ? nowTick : undefined, selectMode,
+          selected: !!selectedIds?.has(task.id), onToggleSelect,
+        })
+      }
+      if (stage === 'done' && visible.length) {
+        const weekStart = weekStartLocal(props.today)
+        const buckets = new Map([['today', []], ['thisWeek', []], ['earlier', []]])
+        for (const task of visible) buckets.get(doneTimeBucket(task, props.today, weekStart)).push(task)
+        const labels = { today: 'doneGroupToday', thisWeek: 'doneGroupWeek', earlier: 'doneGroupEarlier' }
+        return h('div', { className: 'dsh-tasks-collist' }, [...buckets].filter(([, rows]) => rows.length).map(([bucket, rows]) =>
+          h(React.Fragment, { key: bucket },
+            h('div', { className: 'dsh-tasks-done-group-head', 'data-done-group': bucket },
+              h('span', null, props.t(labels[bucket])), h('small', null, rows.length)),
+            rows.map((task, index) => renderCard(task, index, rows)))))
+      }
+      return h('div', { className: 'dsh-tasks-collist' }, visible.length
+        ? visible.map((task, index) => renderCard(task, index, visible))
+        : h('p', { className: 'dsh-tasks-empty' }, empty))
+    })
 
     /** Counts show search matches / total; the actual classification is saved. */
-    function Column({ t, column, board, stage, name, empty, ready, tasks, total, filtered, stages, actions, writable, writing, options, collapsed, showAllDone, statuses, priorities }) {
-      const recentOnly = stage === 'done' && tasks.length > 10 && !filtered && !showAllDone
-      const draggable = !!board && writable && !writing && !filtered && !recentOnly
+    function Column({ t, column, board, stage, name, empty, ready, tasks, total, filtered, sortBy = 'manual', stages, actions, writable, writing, options, collapsed, showAllDone, statuses, priorities, byId, allowCollapse, today, workspaceFilter, selectMode, selectedIds, onToggleSelect, nowTick }) {
+      const recentOnly = stage === 'done' && tasks.length > DONE_PREVIEW && !filtered && !showAllDone
+      const gripVisible = !!board && !filtered && !recentOnly && sortBy === 'manual'
+      const draggable = gripVisible && writable && !writing
       const canOrder = !!board && writable && !writing
       const drop = Dnd.useDroppable({ id: column.id, data: { columnId: column.id, boardColumn: true, name, acceptsTasks: !filtered && !collapsed }, disabled: !board })
       const order = Dnd.useDraggable({ id: 'order:' + column.id, data: { column: { id: column.id, revision: board?.revision, title: name } }, disabled: !canOrder })
@@ -3406,6 +5397,40 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       const collision = Dnd.useDndContext().collisions?.[0]
       const insert = ordering && collision?.id === column.id && collision.data?.changed ? collision.data.side : undefined
       const keyFocus = React.useRef(null)
+      const [quickOpen, setQuickOpen] = React.useState(false)
+      const [quickTitle, setQuickTitle] = React.useState('')
+      const [quickError, setQuickError] = React.useState('')
+      const [quickBusy, setQuickBusy] = React.useState(false)
+      const quickInputRef = React.useRef(null)
+      const addButtonRef = React.useRef(null)
+      React.useEffect(() => {
+        if (collapsed && quickOpen) { setQuickOpen(false); setQuickError('') }
+      }, [collapsed, quickOpen])
+      React.useEffect(() => {
+        if (quickOpen) quickInputRef.current?.focus({ preventScroll: true })
+      }, [quickOpen])
+      const closeQuick = () => {
+        setQuickOpen(false)
+        setQuickError('')
+        window.queueMicrotask?.(() => addButtonRef.current?.focus({ preventScroll: true }))
+      }
+      const submitQuick = async event => {
+        event.preventDefault()
+        if (quickBusy || !writable || writing) return
+        if (!quickTitle.trim()) { setQuickError(t('titleRequired')); return }
+        setQuickBusy(true)
+        setQuickError('')
+        const result = await actions.quickCreate({ title: quickTitle, stage, columnId: board ? column.id : undefined })
+        setQuickBusy(false)
+        if (result?.ok) {
+          setQuickTitle('')
+          window.queueMicrotask?.(() => quickInputRef.current?.focus({ preventScroll: true }))
+        } else {
+          setQuickError(failureText(t, result?.errorCode || 'tasks/create-failed', 'createFailed'))
+        }
+      }
+      const scopedWsLabel = workspaceFilter && workspaceFilter !== 'ungrouped'
+        ? workspaceLabel(t, { workspaceId: workspaceFilter }, options) : ''
       React.useEffect(() => {
         if (writing || !keyFocus.current) return
         const button = keyFocus.current
@@ -3428,11 +5453,13 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           void reorderColumn(board, actions, column.id, target.id, step > 0 ? 'after' : 'before', board.revision)
         }
       }
-      const visible = recentOnly
-        ? [...tasks].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 10) : tasks
+      const doneRange = !collapsed && !filtered && stage === 'done' && tasks.length > DONE_PREVIEW ? h(TaskButton, { className: 'dsh-tasks-done-range',
+        'aria-pressed': !!showAllDone, title: t(showAllDone ? 'showRecent' : 'showAll') + ' · ' + tasks.length,
+        onClick: () => actions.toggleDone(column.id) }, h(Icon, { name: showAllDone ? 'up' : 'down', size: 13 }), t(showAllDone ? 'showRecent' : 'showAll') + (showAllDone ? '' : ' ' + tasks.length)) : null
       return h(
         'section',
         { ref: drop.setNodeRef, className: 'dsh-tasks-col', 'aria-label': name, 'data-stage': stage, 'data-column-id': column.id, 'data-collapsed': collapsed || undefined,
+          'data-column-color': column.color ? '' : undefined, style: column.color ? { '--dsh-tasks-col-color': column.color } : undefined,
           'data-drop': !ordering && drop.isOver || undefined, 'data-column-insert': insert,
           'data-column-dragging': order.isDragging || undefined },
         h(
@@ -3442,37 +5469,71 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
             onMouseDown: order.listeners?.onMouseDown, onTouchStart: order.listeners?.onTouchStart, onKeyDown: handleColumnKey,
             'aria-keyshortcuts': 'ArrowLeft ArrowRight', 'aria-label': t('dragColumn') + ': ' + name, title: t('dragColumnHint'),
             onClick: () => actions.showColumns(column.id) }, h(Icon, { name: 'grip', size: 16 })) : null,
-          h(TaskButton, { type: 'button', className: 'dsh-tasks-coltitle', 'aria-expanded': !collapsed,
-            onClick: () => actions.toggleColumn(board ? column.id : stage) }, h('span', { className: 'dsh-tasks-colname' }, name),
+          h(TaskButton, { type: 'button', className: 'dsh-tasks-coltitle', 'aria-expanded': !collapsed, 'aria-disabled': !allowCollapse || undefined,
+            onClick: () => { if (allowCollapse) actions.toggleColumn(board ? column.id : stage, !collapsed) } }, h('span', { className: 'dsh-tasks-colname' }, name),
           h('span', { className: 'dsh-tasks-count', title: t('countLabel') },
             ready ? filtered ? tasks.length + ' / ' + total : String(total) : '—')),
-          !collapsed && board ? h(TaskButton, { type: 'button', className: 'dsh-tasks-icon-button', 'aria-label': t('rename') + ': ' + name, title: t('rename') + ': ' + name, onClick: () => actions.showColumns(column.id) }, h(Icon, { name: 'edit', size: 14 })) : null,
+          !collapsed && board ? h(TaskButton, { type: 'button', className: 'dsh-tasks-icon-button dsh-tasks-col-rename', 'aria-label': t('rename') + ': ' + name, title: t('rename') + ': ' + name, onClick: () => actions.showColumns(column.id) }, h(Icon, { name: 'edit', size: 14 })) : null,
           !collapsed ? h(TaskButton, { type: 'button', className: 'dsh-tasks-icon-button', 'aria-label': t('add') + ': ' + name, title: t('add') + ': ' + name,
             onClick: () => actions.openForm(stage, board && column.id) }, h(Icon, { name: 'plus' })) : null,
-          !collapsed && !filtered && stage === 'done' && tasks.length > 10 ? h(TaskButton, { className: 'dsh-tasks-done-range',
-            'aria-pressed': !!showAllDone, title: t(showAllDone ? 'showRecent' : 'showAll') + ' · ' + tasks.length,
-            onClick: () => actions.toggleDone(column.id) }, h(Icon, { name: showAllDone ? 'up' : 'down', size: 13 }), t(showAllDone ? 'showRecent' : 'showAll') + (showAllDone ? '' : ' ' + tasks.length)) : null,
         ),
-        !collapsed ? h('div', { className: 'dsh-tasks-collist' }, visible.length
-          ? visible.map((task, index) => h(TaskCard, { key: task.id, t, task, row: stages[task.id], actions, writable, writing, options, board, priorities, draggable, previous: visible[index - 1], next: visible[index + 1], runtime: runtimeOf(task, statuses) }))
-          : h('p', { className: 'dsh-tasks-empty' }, empty))
-        : null,
-        !collapsed ? h('div', { className: 'dsh-tasks-colfoot' },
-          h(TaskButton, { type: 'button', className: 'dsh-tasks-add', onClick: () => actions.openForm(stage, board && column.id) }, h(Icon, { name: 'plus' }), t('add'))) : null,
+        !collapsed ? h(ColumnCards, { tasks, stage, sortBy, recentOnly, empty, stages, statuses, t, actions, writable, writing,
+          options, board, priorities, draggable, gripVisible, byId, today, selectMode, selectedIds, onToggleSelect, nowTick }) : null,
+        !collapsed ? h('div', { className: 'dsh-tasks-colfoot', 'data-has-range': doneRange ? '' : undefined },
+          doneRange,
+          quickOpen ? h('form', { className: 'dsh-tasks-quick-create', onSubmit: submitQuick },
+            h('input', {
+              ref: quickInputRef, type: 'text', className: 'dsh-tasks-quick-input', maxLength: 200,
+              value: quickTitle, disabled: quickBusy, placeholder: t('quickAddPlaceholder'), 'aria-label': t('add') + ': ' + name,
+              onChange: event => { setQuickTitle(event.target.value); if (quickError) setQuickError('') },
+              onKeyDown: event => {
+                if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeQuick() }
+              },
+            }),
+            scopedWsLabel ? h('div', { className: 'dsh-tasks-quick-scope' }, h(Icon, { name: 'folder', size: 11 }), h('span', null, scopedWsLabel)) : null,
+            quickError ? h('p', { className: 'dsh-tasks-quick-error', role: 'alert' }, quickError) : null,
+            h('div', { className: 'dsh-tasks-quick-actions' },
+              h(TaskButton, { type: 'submit', className: 'dsh-tasks-primary dsh-tasks-quick-submit', disabled: !quickTitle.trim() || quickBusy || !writable || writing },
+                t(quickBusy ? 'quickAddAdding' : 'quickAddSubmit')),
+              h(TaskButton, { type: 'button', className: 'dsh-tasks-secondary dsh-tasks-quick-cancel', disabled: quickBusy, onClick: closeQuick }, t('cancelDelete')),
+              h('button', {
+                type: 'button', className: 'dsh-tasks-quick-expand', disabled: quickBusy,
+                onClick: () => {
+                  const draftTitle = quickTitle.trim()
+                  setQuickOpen(false); setQuickTitle(''); setQuickError('')
+                  actions.openForm(stage, board && column.id, draftTitle)
+                },
+              }, t('expandCreateForm'))))
+            : h(TaskButton, {
+              type: 'button', className: 'dsh-tasks-add', elementRef: addButtonRef,
+              onClick: () => { setQuickOpen(true); setQuickError('') },
+            }, h(Icon, { name: 'plus' }), t('add'))) : null,
       )
     }
 
-    function Activity({ t, task, board, actions, activity, draft, writable }) {
+    const BoardColumn = React.memo(Column)
+
+    function Activity({ t, task, board, actions, activity, draft, writable, navigationLocked = false }) {
       const [onlyComments, setOnlyComments] = React.useState(false)
+      const [composerOpen, setComposerOpen] = React.useState(false)
+      const [expandedIds, setExpandedIds] = React.useState(() => new Set())
+      const commentRef = React.useRef(null)
+      const hasDraft = !!(draft?.text || '').trim()
+      const showExpanded = composerOpen || !!draft?.text || !!draft?.error || !!draft?.requestId || !!draft?.pending
+      useAutoGrowTextArea(commentRef, showExpanded, draft?.text || '')
       const kinds = { created: ['eventCreated', 'plus'], updated: ['eventUpdated', 'edit'], moved: ['eventMoved', 'move'],
         completed: ['eventCompleted', 'check'], reopened: ['eventReopened', 'refresh'], bound: ['eventBound', 'link'], comment: ['comment', 'comment'],
-        'image-added': ['imageAdded', 'paperclip'], 'image-removed': ['imageRemoved', 'trash'], 'file-added': ['fileAdded', 'paperclip'], 'file-removed': ['fileRemoved', 'trash'] }
+        'image-added': ['imageAdded', 'paperclip'], 'image-removed': ['imageRemoved', 'trash'], 'file-added': ['fileAdded', 'paperclip'], 'file-removed': ['fileRemoved', 'trash'],
+        'delivery-submitted': ['eventDeliverySubmitted', 'check'], 'delivery-accepted': ['eventDeliveryAccepted', 'check'],
+        'delivery-returned': ['eventDeliveryReturned', 'comment'], 'delivery-continued': ['eventDeliveryContinued', 'link'] }
+      const contentKinds = new Set(['comment', 'delivery-submitted', 'delivery-accepted', 'delivery-returned', 'delivery-continued'])
       const sources = { rpc: 'activityRpc', service: 'activityService', agent: 'activityAgent' }
       const name = id => {
         const column = board.columns.find(row => row.id === id) || defaults.find(row => row.id === id)
         return column ? columnLabel(t, column) : t('unknownColumn')
       }
-      const fields = { title: 'taskTitle', brief: 'taskBrief', workspaceId: 'workspace', model: 'model', ...Object.fromEntries(metaKeys.map(key => [key, key])) }
+      const fields = { title: 'taskTitle', brief: 'taskBrief', workspaceId: 'workspace', model: 'model',
+        ...Object.fromEntries([...metaKeys, ...checklistKeys].map(key => [key, key])) }
       const language = window.document.documentElement.lang || undefined
       const dateLabel = new Intl.DateTimeFormat(language, { dateStyle: 'long' })
       const timeLabel = new Intl.DateTimeFormat(language, { hour: '2-digit', minute: '2-digit' })
@@ -3488,15 +5549,54 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         days.at(-1).events.push({ event, date })
       }
       const loadFailed = activity?.error === 'latest'
+      const toggleExpand = id => setExpandedIds(prev => {
+        const next = new Set(prev)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        return next
+      })
       return h(React.Fragment, null,
-        h('form', { className: 'dsh-tasks-fields dsh-tasks-comment-form', onSubmit(event) { event.preventDefault(); void actions.postComment(task.id) } },
-          h('label', null, fieldTitle('comment', t('comment')), h(TaskTextArea, { name: 'comment', maxLength: 4000, rows: 2, paperInk: true,
-            value: draft?.text || '', disabled: !!draft?.requestId, placeholder: t('commentPlaceholder'), onChange: event => actions.editComment(task.id, event.target.value) })),
+        h('form', {
+          className: 'dsh-tasks-fields dsh-tasks-comment-form',
+          'data-collapsed': !showExpanded ? '' : undefined,
+          onSubmit(event) { event.preventDefault(); void actions.postComment(task.id) },
+          onBlur(event) {
+            if (!event.currentTarget.contains(event.relatedTarget) && !draft?.text && !draft?.error && !draft?.pending && !draft?.requestId) {
+              setComposerOpen(false)
+            }
+          },
+        },
+          h('label', { className: 'dsh-tasks-comment-field' },
+            showExpanded ? fieldTitle('comment', t('comment')) : h('span', { className: 'dsh-tasks-sr-only' }, t('comment')),
+            h(TaskTextArea, {
+              name: 'comment', inputRef: commentRef, maxLength: 4000, rows: showExpanded ? 2 : 1, paperInk: true,
+              value: draft?.text || '', disabled: !!draft?.requestId, placeholder: t('commentPlaceholder'),
+              onFocus: () => setComposerOpen(true),
+              onChange: event => actions.editComment(task.id, event.target.value),
+              onKeyDown(event) {
+                if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  if (writable && hasDraft && !draft?.pending) void actions.postComment(task.id)
+                } else if (event.key === 'Escape' && !draft?.text && !draft?.error && !draft?.requestId && !draft?.pending) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setComposerOpen(false)
+                  event.currentTarget.blur()
+                }
+              },
+            })),
           draft?.error ? h('p', { role: 'alert' }, t('commentFailed')) : null,
-          h(TaskButton, { type: 'submit', className: 'dsh-tasks-primary', disabled: !writable || !draft?.text.trim(), loading: draft?.pending }, t(draft?.error ? 'retry' : 'post'))),
+          showExpanded ? h('div', { className: 'dsh-tasks-comment-actions' },
+            h('span', { className: 'dsh-tasks-field-hint' }, t('commentShortcut')),
+            !draft?.text && !draft?.error && !draft?.pending && !draft?.requestId ? h(TaskButton, {
+              type: 'button', ink: false, className: 'dsh-tasks-secondary dsh-tasks-comment-cancel',
+              onClick: () => setComposerOpen(false),
+            }, t('cancelDelete')) : null,
+            h(TaskButton, { type: 'submit', className: 'dsh-tasks-primary', disabled: !writable || !hasDraft, loading: draft?.pending }, t(draft?.error ? 'retry' : 'post'))) : null),
         h('div', { className: 'dsh-tasks-activity-header' },
           h('h3', null, h(Icon, { name: 'clock', size: 16 }), t('activityHeading')),
-          h('div', { className: 'dsh-tasks-activity-filters', role: 'group', 'aria-label': t('activityHeading') },
+          h('div', { className: 'dsh-tasks-activity-filters dsh-tasks-segmented', role: 'group', 'aria-label': t('activityHeading') },
             h('button', { type: 'button', 'aria-pressed': !onlyComments, onClick: () => setOnlyComments(false) }, t('activityAll')),
             h('button', { type: 'button', 'aria-pressed': onlyComments, onClick: () => setOnlyComments(true) }, t('activityComments')))),
         loadFailed ? h('div', { className: 'dsh-tasks-activity-controls' },
@@ -3509,17 +5609,40 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
             h('time', { dateTime: day }, label)),
           h('ol', { className: 'dsh-tasks-activity', role: 'list', 'aria-label': label }, events.map(({ event, date }) => {
             const [labelKey, icon] = kinds[event.kind] ?? ['activity', 'clock']
-            const detail = event.from && event.to ? name(event.from) + ' → ' + name(event.to) : event.name ?? event.sessionId
-            return h('li', { key: event.id, 'data-kind': event.kind, 'data-activity-id': event.id },
-              h('span', { className: 'dsh-tasks-activity-marker', 'aria-hidden': true }, h(Icon, { name: icon, size: 15 })),
+            const isContent = contentKinds.has(event.kind)
+            const isDelivery = event.kind.startsWith('delivery-')
+            const detailText = event.from && event.to ? name(event.from) + ' → ' + name(event.to) : event.name
+            const timeMeta = h('span', { className: 'dsh-tasks-activity-meta' },
+              h('time', { dateTime: event.at, title: fullTime.format(date) }, timeLabel.format(date)),
+              h('span', { 'aria-hidden': true }, '·'), h('span', null, t(sources[event.source])))
+            if (!isContent) {
+              return h('li', { key: event.id, 'data-kind': event.kind, 'data-tier': 'system', 'data-activity-id': event.id },
+                h('span', { className: 'dsh-tasks-activity-marker', 'aria-hidden': true }, h(Icon, { name: icon, size: 13 })),
+                h('div', { className: 'dsh-tasks-activity-row' },
+                  h('div', { className: 'dsh-tasks-activity-row-main' },
+                    h('strong', null, t(labelKey)),
+                    detailText ? h('span', { className: 'dsh-tasks-activity-inline' }, detailText) : null,
+                    event.sessionId ? h(SessionChip, { t, sessionId: event.sessionId, disabled: navigationLocked, onOpen: actions.openSession }) : null,
+                    event.fields?.length ? h('ul', { className: 'dsh-tasks-activity-fields' },
+                      event.fields.map(key => h('li', { key }, fields[key] ? t(fields[key]) : key))) : null),
+                  timeMeta))
+            }
+            const isLong = isDelivery && !!event.text && (event.text.length > 140 || event.text.split('\n').length > 3)
+            const expanded = expandedIds.has(event.id)
+            return h('li', { key: event.id, 'data-kind': event.kind, 'data-tier': 'content', 'data-activity-id': event.id },
+              h('span', { className: 'dsh-tasks-activity-marker', 'aria-hidden': true }, h(Icon, { name: icon, size: 14 })),
               h('div', { className: 'dsh-tasks-activity-entry' },
-                h('div', { className: 'dsh-tasks-activity-event' }, h('strong', null, t(labelKey)),
-                  h('span', { className: 'dsh-tasks-activity-meta' }, h('time', { dateTime: event.at, title: fullTime.format(date) }, timeLabel.format(date)),
-                    h('span', { 'aria-hidden': true }, '·'), h('span', null, t(sources[event.source])))),
-                event.fields?.length ? h('ul', { className: 'dsh-tasks-activity-fields dsh-tasks-activity-event-detail' },
-                  event.fields.map(key => h('li', { key }, fields[key] ? t(fields[key]) : key))) : null,
-                detail ? h('p', { className: 'dsh-tasks-activity-event-detail' }, detail) : null,
-                event.text ? h('p', { className: 'dsh-tasks-activity-comment' }, event.text) : null))
+                h('div', { className: 'dsh-tasks-activity-event' },
+                  h('div', { className: 'dsh-tasks-activity-event-title' },
+                    h('strong', null, t(labelKey)),
+                    event.sessionId ? h(SessionChip, { t, sessionId: event.sessionId, disabled: navigationLocked, onOpen: actions.openSession }) : null),
+                  timeMeta),
+                event.text ? h(TaskMarkdown, { t, text: event.text, className: 'dsh-tasks-activity-comment' + (isLong && !expanded ? ' is-clamped' : '') }) : null,
+                isDelivery ? h('div', { className: 'dsh-tasks-activity-card-actions' },
+                  isLong ? h(TaskButton, { type: 'button', ink: false, className: 'dsh-tasks-activity-link', onClick: () => toggleExpand(event.id) },
+                    t(expanded ? 'showLess' : 'showMore')) : null,
+                  h(TaskButton, { type: 'button', ink: false, className: 'dsh-tasks-activity-link', onClick: () => actions.setDetailView('deliveryTab') },
+                    t('viewDelivery') + ' →')) : null))
           })))),
         activity?.before ? h('div', { className: 'dsh-tasks-activity-controls' },
           activity.error === 'older' ? h('p', { className: 'dsh-tasks-activity-message', role: 'alert' }, t('historyMoreFailed')) : null,
@@ -3542,18 +5665,94 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           } }, t(reload ? 'reloadDetails' : 'discardClose'))))
     }
 
-    function TaskDetails({ t, task, editor, options, actions, writable, writing, column, runtime, board, activity, draft, jobs, priorities }) {
-      const [view, setView] = React.useState('detailTab')
+    function DeliverySection({ t, task, status, actions, busy, navigationLocked, mutation, launchLabel, onLaunch }) {
+      const delivery = task.delivery
+      const [returning, setReturning] = React.useState(false)
+      const [feedback, setFeedback] = React.useState('')
+      const pending = delivery?.status === 'pending'
+      const returned = delivery?.status === 'returned'
+      const statusKey = pending ? 'reviewPending' : returned ? 'reviewReturned' : 'reviewAccepted'
+      const bannerTone = !delivery ? 'empty' : pending ? 'pending' : returned ? 'returned' : 'accepted'
+      const formatted = date => new Date(date).toLocaleString()
+      const trivialRemaining = /^(?:无|暂无|none|n\/a)[。.\s]*$/i.test((delivery?.remaining || '').trim())
+      const evidenceCard = (key, text, icon, { callout = false } = {}) => text ? h('section', {
+        className: 'dsh-tasks-evidence-card' + (callout ? ' dsh-tasks-evidence-callout' : ''),
+      },
+        h('h4', null, h(Icon, { name: icon, size: 14 }), t(key)),
+        h(TaskMarkdown, { t, text })) : null
+      const links = (delivery?.links ?? []).flatMap(link => {
+        const url = evidenceUrl(link.url)
+        return url ? [{ ...link, url }] : []
+      })
+      const snapshotMismatch = !!(delivery?.criteria && delivery.criteria !== task.acceptanceCriteria)
+      return h('section', { className: 'dsh-tasks-delivery-section', 'aria-label': t('deliveryHeading'), 'aria-busy': !!mutation?.pending },
+        h('div', { className: 'dsh-tasks-delivery-banner', 'data-tone': bannerTone },
+          delivery ? h('div', { className: 'dsh-tasks-delivery-banner-info' },
+            h(StatusBadge, { status: statusKey, label: t(statusKey), paperInk: true }),
+            h('div', { className: 'dsh-tasks-delivery-times' },
+              h('span', null, t('deliverySubmittedAt') + ' ', h('time', { dateTime: delivery.submittedAt }, formatted(delivery.submittedAt))),
+              delivery.reviewedAt ? h('span', null, '· ' + t('deliveryReviewedAt') + ' ', h('time', { dateTime: delivery.reviewedAt }, formatted(delivery.reviewedAt))) : null))
+            : h('div', { className: 'dsh-tasks-delivery-banner-info' },
+              h('span', { className: 'dsh-tasks-delivery-runtime-label' }, t('deliveryRuntime')),
+              h(StatusBadge, { status, label: t(status), paperInk: true })),
+          h('div', { className: 'dsh-tasks-delivery-banner-actions' },
+            delivery && task.activeSessionId && status !== 'idle' ? h(StatusBadge, { status, label: t(status), paperInk: true }) : null,
+            task.activeSessionId ? h(TaskButton, { className: 'dsh-tasks-retry', disabled: navigationLocked, onClick: () => actions.openSession(task.activeSessionId) }, t('openSession'))
+              : !delivery && launchLabel ? h(TaskButton, { className: 'dsh-tasks-primary', disabled: busy, onClick: onLaunch }, t(launchLabel)) : null)),
+        snapshotMismatch ? evidenceCard('deliveryCriteriaSnapshot', delivery.criteria, 'check') : null,
+        task.acceptanceCriteria ? h('details', { className: 'dsh-tasks-delivery-criteria', open: pending && !snapshotMismatch ? true : undefined },
+          h('summary', null, h(Icon, { name: 'check', size: 14 }), h('span', null, t('deliveryCriteriaRef')), h(Icon, { name: 'chevronDown', size: 14 })),
+          h('div', { className: 'dsh-tasks-delivery-criteria-body' }, h(TaskMarkdown, { t, text: task.acceptanceCriteria }))) : null,
+        delivery ? h(React.Fragment, null,
+          evidenceCard('deliveryEvidence', delivery.summary, 'file'),
+          evidenceCard('deliveryVerification', delivery.verification, 'check'),
+          evidenceCard('deliveryUnverified', delivery.remaining, 'alert', { callout: !trivialRemaining }),
+          links.length ? h('section', { className: 'dsh-tasks-evidence-card' },
+            h('h4', null, h(Icon, { name: 'link', size: 14 }), t('deliveryLinksHeading')),
+            h('ul', { className: 'dsh-tasks-evidence-links' }, links.map((link, index) => h('li', { key: index },
+              h('a', { href: link.url, title: link.url, target: '_blank', rel: 'noopener noreferrer' },
+                h(Icon, { name: 'link', size: 13 }), h('span', null, link.label), h(Icon, { name: 'externalLink', size: 12 })))))) : null,
+          evidenceCard('deliveryFeedback', delivery.feedback, 'comment'),
+          pending && returning ? h('label', { className: 'dsh-tasks-review-input' }, fieldTitle('comment', t('deliveryFeedback')), h(TaskTextArea, {
+            rows: 3, maxLength: 4000, paperInk: true, value: feedback, disabled: busy, name: 'reviewFeedback', placeholder: t('deliveryFeedbackHint'),
+            onChange: event => setFeedback(event.target.value),
+            onKeyDown(event) {
+              if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && !busy && feedback.trim()) {
+                event.preventDefault()
+                event.stopPropagation()
+                void actions.reviewDelivery(task.id, 'return', feedback)
+              }
+            },
+          })) : null,
+          pending ? h('div', { className: 'dsh-tasks-delivery-actions' },
+            returning ? h(React.Fragment, null,
+              h(TaskButton, { disabled: busy, onClick: () => setReturning(false) }, t('cancelDelete')),
+              h(TaskButton, { className: 'dsh-tasks-primary', disabled: busy || !feedback.trim(), onClick: () => actions.reviewDelivery(task.id, 'return', feedback) }, t('returnDelivery')))
+              : h(React.Fragment, null,
+                h(TaskButton, { disabled: busy, onClick: () => setReturning(true) }, t('returnDelivery')),
+                h(TaskButton, { className: 'dsh-tasks-primary', disabled: busy, onClick: () => actions.reviewDelivery(task.id, 'accept') }, t('acceptDelivery')))) : null,
+          returned ? delivery.continuedAt ? h('p', { className: 'dsh-tasks-delivery-status', role: 'status' }, h(Icon, { name: 'check', size: 14 }), t('feedbackSent'))
+            : h('div', { className: 'dsh-tasks-delivery-actions' },
+              h(TaskButton, { className: 'dsh-tasks-primary', disabled: busy, onClick: () => actions.continueDelivery(task.id) }, t('sendReviewFeedback'))) : null,
+          mutation?.errorCode ? h('p', { className: 'dsh-tasks-feedback', role: 'alert' }, failureText(t, mutation.errorCode, 'deliveryMutationFailed')) : null)
+          : h('div', { className: 'dsh-tasks-delivery-empty' },
+            h('p', { className: 'dsh-tasks-field-hint' }, t('deliveryNotSubmitted'), task.activeSessionId ? ' ' + t('deliveryWait') : '')))
+    }
+
+    function TaskDetails({ t, task, editor, options, actions, writable, writing, column, runtime, board, activity, draft, jobs, priorities, byId, mutation, view = 'detailTab' }) {
       const [copyState, setCopyState] = React.useState()
       const [confirmation, setConfirmation] = React.useState(null)
+      const [resetSignal, setResetSignal] = React.useState(0)
       const detailPanel = React.useRef(null), lastField = React.useRef(null)
       const viewId = React.useId()
-      const activityView = !!board && view === 'activity'
+      const views = board ? DETAIL_VIEWS : DETAIL_VIEWS.filter(key => key !== 'activity')
+      const selected = views.includes(view) ? view : 'detailTab'
+      const activityView = selected === 'activity', deliveryView = selected === 'deliveryTab', detailsView = selected === 'detailTab'
       const sourceChanged = editor?.errorCode === 'tasks/edit-source-changed'
       const conflict = sourceChanged || editor && !editor.retryInput && (editor.revision !== task.revision || editor.errorCode === 'tasks/revision-conflict')
       const close = () => {
-        if (confirmation) return
-        if (editor?.pending || editor?.retryInput) { setView('detailTab'); return }
+        if (confirmation || mutation?.pending) return
+        if (editor?.pending || editor?.retryInput) { if (!detailsView) actions.setDetailView('detailTab'); return }
         if (editor) setConfirmation('close')
         else actions.closeDetails()
       }
@@ -3568,19 +5767,42 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       const busy = !writable || writing || !!editor
       const resume = unfinishedLaunch(task), openSession = canStartNewConversation(task)
       const launch = () => actions.openLaunch(task.id)
-      const selectView = next => {
-        setView(next)
-        if (next === 'activity' && !activity) void actions.loadHistory()
+      const blockers = blockersOf(task, byId)
+      const unlinked = inProgressUnlinked(task)
+      const status = unlinked && !resume ? 'unlinkedConversation' : runtime
+      const launchLabel = resume ? 'resumeLaunch' : !task.activeSessionId && task.stage !== 'done' && !blockers.length
+        ? unlinked ? 'createConversation' : 'launch' : undefined
+      const columns = board?.columns?.length ? board.columns : defaults
+      const currentColumn = column || columns.find(row => row.id === taskColumn(task)) || columns[0]
+      const handleDiscardEdits = () => {
+        const fromFooter = window.document?.activeElement?.closest?.('.dsh-tasks-detail-actions')
+        actions.discardDetails()
+        setResetSignal(value => value + 1)
+        if (fromFooter) queueMicrotask(() => restoreEditorFocus(null))
       }
+      const run = h(DeliverySection, {
+        key: task.delivery?.id || 'run', t, task, status, actions, busy,
+        navigationLocked: !!editor || !!mutation?.pending, mutation, launchLabel, onLaunch: launch,
+      })
       const meta = h('div', { className: 'dsh-tasks-detail-meta' },
-        h('span', null, column ? columnLabel(t, column) : t(STAGES[task.stage])),
-        h(StatusBadge, { status: runtime, label: t(runtime), paperInk: true }),
+        h(ColumnPillSelect, {
+          t, columns, current: currentColumn, disabled: busy, blockDone: deliveryOpen(task), labelPrefix: t('changeColumn'),
+          onSelect(targetColumn) {
+            if (targetColumn.id === currentColumn?.id) return
+            if (targetColumn.stage === 'done' && deliveryOpen(task)) return
+            if (board?.columns?.length) void actions.move({ taskId: task.id, expectedRevision: task.revision, columnId: targetColumn.id })
+            else void actions.setStage(task.id, targetColumn.stage)
+          },
+        }),
+        h(StatusBadge, { status, label: t(status), paperInk: true }),
         h(TaskButton, { className: 'dsh-tasks-copy-id', 'aria-label': t('copyTaskId'), title: t('copyTaskId'), onClick: async () => {
           try { await window.navigator.clipboard.writeText(task.id); setCopyState('copied') }
           catch { setCopyState('show') }
         } }, h(Icon, { name: 'copy', size: 14 }), 'ID'),
         copyState ? h('span', { className: copyState === 'show' ? 'dsh-tasks-detail-copy' : undefined, role: 'status' },
-          copyState === 'show' ? t('taskId') + ': ' + task.id : t('taskIdCopied')) : null)
+          copyState === 'show' ? t('taskId') + ': ' + task.id : t('taskIdCopied')) : null,
+        editor ? h('span', { className: 'dsh-tasks-unsaved-pill', role: 'status' },
+          h('span', { className: 'dsh-tasks-dot', 'aria-hidden': true }), t('unsavedBadge')) : null)
       const menu = h(Dropdown, { className: 'dsh-tasks-detail-menu' },
         h('summary', { className: 'dsh-tasks-icon-button', 'aria-label': t('moreTask'), title: t('moreTask'), 'data-task-ink': 'button' },
           taskInk('button', { variant: 'ghost' }), h(Icon, { name: 'more' })),
@@ -3589,23 +5811,53 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
             onClick: () => actions.openLaunch(task.id, { newConversation: true }),
           }, t('newSession')) : null,
           h(TaskButton, { className: 'dsh-tasks-danger', disabled: busy, onClick: () => actions.openDelete(task.id) }, h(Icon, { name: 'trash', size: 14 }), t('deleteTask'))))
-      const views = ['detailTab', 'activity']
-      return h(React.Fragment, null, h(TaskDrawer, { t, title: t('details'), heading: task.title, meta, menu, onClose: close, editorInk: true },
-        board ? h('div', { className: 'dsh-tasks-detail-tabs', role: 'tablist', 'aria-label': t('detailViews') },
-          views.map((key, index) => h('button', { key, type: 'button', id: viewId + key, role: 'tab', 'data-task-ink': 'tabs', 'aria-selected': view === key,
-            'aria-controls': viewId + key + '-panel', tabIndex: view === key ? 0 : -1,
-            onClick: () => selectView(key), onKeyDown(event) {
-              const next = { Home: 0, End: 1, ArrowLeft: 1 - index, ArrowRight: 1 - index }[event.key]
-              if (next === undefined) return
-              event.preventDefault()
-              selectView(views[next])
-              window.document.getElementById(viewId + views[next])?.focus()
-            } }, taskInk('tabs'), t(key)))) : null,
-        h('div', { ref: detailPanel, onFocusCapture: event => { lastField.current = event.target }, className: 'dsh-tasks-dialog-body dsh-tasks-detail-panel', hidden: activityView,
-          ...(board ? { role: 'tabpanel', id: viewId + 'detailTab-panel', 'aria-labelledby': viewId + 'detailTab' } : {}) },
-          h(TaskEditorFields, { t, values: editor ?? task, change: actions.editDetails, options, board, priorities, locked, autofocus: true,
-            revision: task.revision, dirty: !!editor },
-            board ? h(TaskImages, { key: task.id, t, task, actions, jobs, active: !activityView, locked: !writable || !!editor?.pending }) : null),
+      const showSaveFooter = !!editor
+      const showIdleFooter = !editor && detailsView && (launchLabel || !!task.activeSessionId)
+      return h(React.Fragment, null, h(TaskDrawer, {
+        t, title: t('details'),
+        headingNode: h(DetailHeaderTitle, { t, value: editor ? editor.title : task.title, disabled: locked, onChange: value => actions.editDetails('title', value) }),
+        meta, menu, onClose: close, editorInk: true,
+        onKeyDown(event) {
+          if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing
+            && editor && writable && !writing && editor.title.trim() && !conflict && !editor.pending) {
+            event.preventDefault()
+            void actions.saveDetails()
+          }
+        },
+      },
+        h('div', { className: 'dsh-tasks-detail-tabs', role: 'tablist', 'aria-label': t('detailViews') },
+          views.map((key, index) => {
+            const count = key === 'activity' ? (activity ? activity.events.length : task.commentCount) : 0
+            const deliveryStatus = key === 'deliveryTab' ? task.delivery?.status : undefined
+            const deliveryLabel = deliveryStatus === 'pending' ? t('reviewPending')
+              : deliveryStatus === 'returned' ? t('reviewReturned')
+                : deliveryStatus === 'accepted' ? t('reviewAccepted') : undefined
+            return h('button', {
+              key, type: 'button', id: viewId + key, role: 'tab', 'data-task-ink': 'tabs',
+              'aria-label': t(key), 'aria-selected': selected === key,
+              'aria-controls': viewId + key + '-panel', tabIndex: selected === key ? 0 : -1,
+              'data-modal-autofocus': selected === key ? '' : undefined,
+              onClick: () => actions.setDetailView(key),
+              onKeyDown(event) {
+                const countTabs = views.length
+                const next = { Home: 0, End: countTabs - 1, ArrowLeft: (index + countTabs - 1) % countTabs, ArrowRight: (index + 1) % countTabs }[event.key]
+                if (next === undefined) return
+                event.preventDefault()
+                actions.setDetailView(views[next])
+                event.currentTarget.parentElement?.querySelectorAll('[role="tab"]')[next]?.focus()
+              },
+            },
+              taskInk('tabs'),
+              h('span', { className: 'dsh-tasks-tab-label' }, t(key)),
+              count > 0 ? h('span', { className: 'dsh-tasks-tab-count', 'aria-hidden': true }, String(count)) : null,
+              deliveryLabel ? h('span', { className: 'dsh-tasks-tab-badge', 'data-tone': deliveryStatus, 'aria-hidden': true },
+                h('span', { className: 'dsh-tasks-dot' }), deliveryLabel) : null)
+          })),
+        h('div', { ref: detailPanel, onFocusCapture: event => { lastField.current = event.target }, className: 'dsh-tasks-dialog-body dsh-tasks-detail-panel',
+          hidden: !detailsView, role: 'tabpanel', id: viewId + 'detailTab-panel', 'aria-labelledby': viewId + 'detailTab' },
+          h(TaskEditorFields, { t, values: editor ? { ...editor, id: task.id, stage: task.stage } : task, change: actions.editDetails, options, board, priorities, locked, autofocus: false,
+            revision: task.revision, resetSignal, dirty: !!editor, byId, actions, showTitle: false },
+            board ? h(TaskImages, { key: task.id, t, task, actions, jobs, active: detailsView, locked: !writable || !!editor?.pending }) : null),
           h(OptionsFeedback, { t, options, reload: actions.loadOptions }),
           conflict ? h('div', { className: 'dsh-tasks-feedback', role: 'alert' }, t(sourceChanged ? 'editSourceChanged' : 'editConflict'), ' ',
             !editor?.retryInput ? h(TaskButton, { className: 'dsh-tasks-retry', disabled: writing, onClick: () => setConfirmation('reload') }, t('reloadDetails')) : null) : null,
@@ -3614,20 +5866,25 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           h('dl', { className: 'dsh-tasks-detail-grid' },
             h('dt', null, t('created')), h('dd', null, new Date(task.createdAt).toLocaleString()),
             task.stage === 'done' ? h(React.Fragment, null, h('dt', null, t('completedAt')), h('dd', null, task.completedAt ? new Date(task.completedAt).toLocaleString() : t('unknownTime'))) : null,
-            task.activeSessionId ? h(React.Fragment, null, h('dt', null, t('session')), h('dd', null,
-              h(TaskButton, { type: 'button', className: 'dsh-tasks-retry', disabled: !!editor, onClick: () => actions.openSession(task.activeSessionId) }, t('openSession')))) : null,
-            task.previousSessionIds?.length ? h(React.Fragment, null, h('dt', null, t('history')), h('dd', null,
-              task.previousSessionIds.map(id => h(TaskButton, { key: id, type: 'button', className: 'dsh-tasks-retry', disabled: !!editor, onClick: () => actions.openSession(id) }, id)))) : null,
+            task.previousSessionIds?.length ? h(React.Fragment, null, h('dt', null, t('history')), h('dd', { className: 'dsh-tasks-detail-sessions' },
+              task.previousSessionIds.map(id => h(SessionChip, { key: id, t, sessionId: id, disabled: !!editor, onOpen: actions.openSession })))) : null,
            ),
         ),
         board ? h('div', { className: 'dsh-tasks-dialog-body dsh-tasks-detail-panel dsh-tasks-detail-activity', hidden: !activityView,
           role: 'tabpanel', id: viewId + 'activity-panel', 'aria-labelledby': viewId + 'activity' },
-          activityView || activity ? h(Activity, { t, task, board, actions, activity, draft, writable }) : null) : null,
-        !activityView ? h('div', { className: 'dsh-tasks-form-actions dsh-tasks-detail-actions' },
-          editor ? h(TaskButton, { className: 'dsh-tasks-primary', key: 'save', disabled: !writable || writing || !editor.title.trim() || conflict, onClick: actions.saveDetails },
-            t(editor.pending ? 'savingDetails' : editor.retryInput ? 'retry' : 'saveDetails'))
-            : h(TaskButton, { className: 'dsh-tasks-primary', key: 'session', disabled: openSession ? undefined : busy,
-              onClick: openSession ? () => actions.openSession(task.activeSessionId) : launch }, t(openSession ? 'openSession' : resume ? 'resumeLaunch' : 'launch'))) : null,
+          activityView || activity ? h(Activity, { t, task, board, actions, activity, draft, writable, navigationLocked: !!editor || !!mutation?.pending }) : null) : null,
+        h('div', { className: 'dsh-tasks-dialog-body dsh-tasks-detail-panel dsh-tasks-detail-delivery', hidden: !deliveryView,
+          role: 'tabpanel', id: viewId + 'deliveryTab-panel', 'aria-labelledby': viewId + 'deliveryTab' }, run),
+        showSaveFooter || showIdleFooter ? h('div', { className: 'dsh-tasks-form-actions dsh-tasks-detail-actions' },
+          showSaveFooter ? h(React.Fragment, null,
+            h('span', { className: 'dsh-tasks-draft-hint' }, t('unsavedBadge')),
+            !editor.pending && !editor.retryInput ? h(TaskButton, { className: 'dsh-tasks-secondary', key: 'discard', onClick: handleDiscardEdits }, t('discardEdits')) : null,
+            h(TaskButton, { className: 'dsh-tasks-primary', key: 'save', disabled: !writable || writing || !editor.title.trim() || conflict, onClick: actions.saveDetails },
+              t(editor.pending ? 'savingDetails' : editor.retryInput ? 'retry' : 'saveDetails')))
+            : launchLabel ? h(TaskButton, { className: 'dsh-tasks-primary', key: 'session', disabled: busy,
+              onClick: launch }, t(launchLabel))
+              : h(TaskButton, { className: 'dsh-tasks-secondary', key: 'openSession', disabled: !!mutation?.pending,
+                onClick: () => actions.openSession(task.activeSessionId) }, t('openSession'))) : null,
       ), confirmation ? h(DetailConfirmation, { t, reload: confirmation === 'reload', restoreFocus: restoreEditorFocus,
         disabled: !editor || !!editor.pending || !!editor.retryInput || (confirmation === 'reload' && writing),
         onKeep: () => setConfirmation(null), onDiscard: () => {
@@ -3736,11 +5993,12 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           h(TaskButton, { className: 'dsh-tasks-primary', disabled: restore.pending, onClick: actions.restoreSession }, t('restoreOpen'))))
     }
 
-    function LaunchForm({ t, form, task, options, actions, writable, runtime, jobs }) {
+    function LaunchForm({ t, form, task, options, actions, writable, runtime, jobs, dependenciesBlocked }) {
       const locked = form.pending || !!form.retryInput
-      const imageJobs = jobs?.filter(job => job.image) ?? []
-      const hasLaunchImages = !!(task.imageCount || imageJobs.length || form.retryInput?.includeImages)
-      const waitingForImages = !locked && form.includeImages && imageJobs.length > 0
+      const legacyImages = !!form.retryInput?.includeImages && !form.retryInput?.includeFiles
+      const sendingFiles = form.retryInput ? !!form.retryInput.includeFiles || legacyImages : !!form.includeFiles
+      const hasLaunchFiles = form.retryInput ? sendingFiles : !!(task.fileCount || task.imageCount || jobs?.length)
+      const waitingForFiles = !locked && sendingFiles && !!jobs?.length
       const existing = !!task.activeSessionId && !locked
       const busy = busySource(runtime)
       const newConversation = existing && !!form.newConversation
@@ -3751,9 +6009,13 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       const receipt = receiptFor(task, form)
       const unknown = unknownFork(receipt) || form.errorCode === 'tasks/fork-unknown'
       const checkReceipt = form.checkReceipt || (form.errorCode === 'tasks/fork-unknown' && !unknownFork(receipt))
-      const canSubmit = showFields && writable && !form.pending && !waitingForImages && !(blocked && source) && !unknown && !checkReceipt && !!form.content?.trim()
-      const title = form.retryInput && !form.pending ? 'resumeLaunch' : newConversation || form.retryInput?.replaceActive ? 'newSession' : 'launch'
-      const note = form.retryInput && !form.pending ? 'resumeNote' : replacing ? 'newSessionNote' : !existing && !locked ? 'launchNote' : null
+      const dependencyRefusal = !locked && dependenciesBlocked
+      const canSubmit = showFields && writable && !form.pending && !waitingForFiles && !dependencyRefusal && !(blocked && source) && !unknown && !checkReceipt && !!form.content?.trim()
+      const unlinked = inProgressUnlinked(task)
+      const title = form.retryInput && !form.pending ? 'resumeLaunch' : newConversation || form.retryInput?.replaceActive ? 'newSession'
+        : unlinked ? 'createConversation' : 'launch'
+      const note = form.retryInput && !form.pending ? 'resumeNote' : replacing ? 'newSessionNote'
+        : !existing && !locked ? unlinked ? 'createConversationNote' : 'launchNote' : null
       const selection = form.model ?? (source ? undefined : options.defaultModel)
       const model = options.groups.find(group => group.id === selection?.provider)?.models.find(row => row.id === selection?.model)
       const efforts = model?.reasoning?.efforts ?? []
@@ -3767,6 +6029,10 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         } },
           h('div', { className: 'dsh-tasks-dialog-body' },
             note && !unknown && !checkReceipt ? h('p', { className: 'dsh-tasks-dialog-note' }, t(note)) : null,
+            dependencyRefusal ? h('p', { className: 'dsh-tasks-feedback', role: 'status' }, t('dependencyBlocked')) : null,
+            showFields && !locked && task.acceptanceCriteria ? h('details', { className: 'dsh-tasks-launch-criteria' },
+              h('summary', null, t('acceptanceCriteria')), h('p', null, task.acceptanceCriteria),
+              h('small', null, t('criteriaLaunchHint'))) : null,
             showFields && (newConversation || form.replaceActive || form.retryInput?.replaceActive || source) ? h('fieldset', { className: 'dsh-tasks-history-choice', disabled: locked },
               h('legend', null, t('conversationType')),
               h('label', null, h('input', { type: 'radio', name: 'launchHistory', value: 'blank', checked: !source, disabled: locked,
@@ -3774,9 +6040,9 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
               h('label', null, h('input', { type: 'radio', name: 'launchHistory', value: 'fork', checked: !!source, disabled: locked || !!blocked,
                 onChange: () => actions.editLaunch('forkFromSessionId', task.activeSessionId) }), t('forkSession')),
               blocked !== 'sessionStatusUnknown' ? h('p', { className: 'dsh-tasks-field-hint' }, t(blocked || 'forkHint')) : null) : null,
-            showFields && hasLaunchImages ? h(Checkbox, { checked: !!form.includeImages, disabled: locked,
-              label: t('launchImages'), onChange: checked => actions.editLaunch('includeImages', checked) }) : null,
-            showFields && waitingForImages ? h('p', { role: 'status' }, t('launchUploadPending')) : null,
+            showFields && hasLaunchFiles ? h(Checkbox, { checked: sendingFiles, disabled: locked,
+              label: t(legacyImages ? 'launchImages' : 'launchFiles'), onChange: checked => actions.editLaunch('includeFiles', checked) }) : null,
+            showFields && waitingForFiles ? h('p', { role: 'status' }, t('launchUploadPending')) : null,
             existing ? h('div', { className: 'dsh-tasks-feedback' },
               h('p', null, t(runtime === 'unknown' ? 'sessionStatusUnknown' : busy ? 'sessionBusy' : newConversation ? 'existingSessionNote' : 'sessionExists')),
               h(TaskButton, { type: 'button', className: 'dsh-tasks-retry', 'data-dsh-initial-focus': showFields ? undefined : '', onClick: () => actions.openSession(task.activeSessionId) }, t('openSession')),
@@ -3813,12 +6079,12 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
               h('label', null, h('span', { className: 'dsh-tasks-field-title' }, t('firstMessage')),
                 h(TaskTextArea, { name: 'content', rows: 6, required: true, 'data-dsh-initial-focus': '', value: form.content,
                   onChange: event => actions.editLaunch('content', event.target.value) }))) : null,
-            showFields && hasLaunchImages ? h(React.Fragment, null,
+            showFields && hasLaunchFiles ? h(React.Fragment, null,
               form.retryInput && !launchRequestId ? h('p', { role: 'status' }, t('launchPreviewPending'), ' ',
                 h(TaskButton, { disabled: form.pending, onClick: actions.refresh }, t('refresh')))
                 : h(TaskImages, { key: task.id + ':' + (launchRequestId ?? 'current'), t, task, actions, readOnly: true,
-                  launchRequestId, jobs: launchRequestId ? [] : imageJobs }),
-              !form.includeImages ? h('p', { className: 'dsh-tasks-field-hint' }, t('launchWithoutImages')) : null) : null,
+                  launchRequestId, jobs: launchRequestId ? [] : jobs }),
+              !sendingFiles ? h('p', { className: 'dsh-tasks-field-hint' }, t('launchWithoutFiles')) : null) : null,
             unknown ? h('p', { className: 'dsh-tasks-feedback', role: 'alert' }, t('forkUnknown')) : null,
             checkReceipt ? h('div', { className: 'dsh-tasks-feedback' }, h('p', null, t('checkLaunchNote')),
               h(TaskButton, { disabled: form.pending || !writable, onClick: actions.checkForkReceipt }, t('checkLaunch'))) : null,
@@ -3832,7 +6098,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
             h('span', { className: 'dsh-tasks-spacer' }),
             h(TaskButton, { type: 'button', className: 'dsh-tasks-retry', onClick: actions.closeLaunch }, t('close')),
             (showFields || newConversation) && !unknown && !checkReceipt ? h(TaskButton, { type: 'submit', className: 'dsh-tasks-primary', disabled: !canSubmit },
-              t(form.pending ? 'starting' : form.retryInput ? 'resumeLaunch' : newConversation ? 'newSessionAction' : 'launch')) : null)))
+              t(form.pending ? 'starting' : form.retryInput ? 'resumeLaunch' : newConversation || unlinked ? 'newSessionAction' : 'launch')) : null)))
     }
 
     /**
@@ -3879,8 +6145,91 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       return actions.editColumns({ action: 'reorder', columnId: id, before, expectedRevision })
     }
 
+    const COLUMN_COLOR_PRESETS = ['#e5b94c', '#8451b4', '#3b82c4', '#3b9e6c', '#d96b6b', '#d9823b', '#2d9d9c', '#7a7670']
+    const stagePreviewColor = (stage, columnId) => stage === 'done' ? '#3b9e6c' : stage === 'doing' ? '#3b82c4' : columnId === 'stage:todo' ? '#e5b94c' : '#8451b4'
+
+    function ColumnColorPicker({ t, value = '', stage, columnId, disabled = false, onChange, onCommit }) {
+      const fallback = stagePreviewColor(stage, columnId)
+      const [picked, setPicked] = React.useState(null)
+      const normalized = value ? value.toLowerCase() : ''
+      const preview = value || fallback
+      const draftHex = (picked || normalized || fallback).toLowerCase()
+      const closeMenu = event => {
+        const menu = event?.currentTarget?.closest?.('details')
+        if (!menu) return
+        menu.open = false
+        menu.querySelector('summary')?.focus()
+      }
+      const choose = (event, nextColor) => {
+        setPicked(null)
+        closeMenu(event)
+        if (onCommit) onCommit(nextColor, event)
+        else onChange?.(nextColor || '')
+      }
+      const triggerLabel = t('columnColor') + ': ' + (value ? value.toUpperCase() : t('columnColorDefault'))
+      return h(Dropdown, {
+        className: 'dsh-tasks-col-color-picker',
+        onToggle(event) { if (!event.currentTarget.open) setPicked(null) },
+      },
+        h('summary', {
+          className: 'dsh-tasks-col-color-trigger',
+          'aria-label': triggerLabel,
+          title: triggerLabel,
+          'aria-disabled': disabled || undefined,
+          tabIndex: disabled ? -1 : undefined,
+          'data-custom': value ? '' : undefined,
+          style: { '--dsh-tasks-swatch': preview },
+          onClick(event) { if (disabled) event.preventDefault() },
+        }, h('span', { className: 'dsh-tasks-col-color-dot', 'aria-hidden': true })),
+        h('input', { type: 'hidden', name: 'color', value: value || '' }),
+        h('div', { className: 'dsh-tasks-menu dsh-tasks-col-color-menu', popover: 'manual', 'data-task-ink': 'overlay' },
+          h('div', { className: 'dsh-tasks-col-color-head' },
+            h('span', { className: 'dsh-tasks-menu-label' }, t('columnColor')),
+            h(TaskButton, {
+              type: 'button',
+              className: 'dsh-tasks-col-color-reset',
+              disabled: disabled || !value,
+              'aria-pressed': !value,
+              onClick: event => choose(event, null),
+            }, t('columnColorDefault'))),
+          h('div', { className: 'dsh-tasks-col-color-swatches', role: 'group', 'aria-label': t('columnColor') },
+            COLUMN_COLOR_PRESETS.map(hex => h('button', {
+              key: hex,
+              type: 'button',
+              className: 'dsh-tasks-col-color-swatch',
+              'data-color': hex,
+              'aria-label': t('columnColor') + ' ' + hex.toUpperCase(),
+              'aria-pressed': normalized === hex,
+              disabled,
+              style: { '--dsh-tasks-swatch': hex },
+              onClick: event => choose(event, hex),
+            }))),
+          h('div', { className: 'dsh-tasks-col-color-custom' },
+            h('label', { className: 'dsh-tasks-swatch-field' },
+              h('span', null, t('columnColorCustom')),
+              h('input', {
+                type: 'color',
+                'aria-label': t('columnColorCustom'),
+                value: draftHex,
+                disabled,
+                onChange(event) {
+                  const hex = event.target.value.toLowerCase()
+                  if (onCommit) setPicked(hex)
+                  else onChange?.(hex)
+                },
+              })),
+            h('code', { className: 'dsh-tasks-col-color-hex' }, draftHex.toUpperCase()),
+            onCommit ? h(TaskButton, {
+              type: 'button',
+              className: 'dsh-tasks-secondary dsh-tasks-col-color-apply',
+              disabled,
+              onClick: event => choose(event, draftHex),
+            }, t('applyColor')) : null)))
+    }
+
     function ColumnManager({ t, board, actions, busy, tasks, error, selected }) {
       const [stage, setStage] = React.useState('doing')
+      const [newColor, setNewColor] = React.useState('')
       const edit = change => actions.editColumns({ ...change, expectedRevision: board.revision })
       return h(Modal, { t, title: t('columns'), intro: t('columnsIntro'), className: 'dsh-tasks-management-dialog dsh-tasks-column-manager', focusClose: true,
         onClose: () => actions.showColumns(false), restoreFocus: restoreManagerFocus },
@@ -3889,8 +6238,21 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
             void reorderColumn(board, actions, input.taskId, input.columnId, input.anchor?.side, input.expectedRevision)
           } }, board.columns.map((column, index) => {
             const count = tasks.filter(task => taskColumn(task) === column.id).length
-            return h(ManagedColumn, { key: column.id + ':' + (column.name || ''), column, revision: board.revision, t, className: 'dsh-tasks-column-form', 'data-column-id': column.id,
-              onSubmit(event) { event.preventDefault(); void edit({ action: 'rename', columnId: column.id, name: event.currentTarget.elements.name.value }) } },
+            return h(ManagedColumn, { key: column.id + ':' + (column.name || '') + ':' + (column.color || ''), column, revision: board.revision, t, className: 'dsh-tasks-column-form', 'data-column-id': column.id,
+              onSubmit(event) {
+                event.preventDefault()
+                const colorField = event.currentTarget.elements.color
+                const rawColor = colorField?.value?.trim()
+                const colorPatch = colorField === undefined ? {} : rawColor ? { color: rawColor } : column.color ? { color: null } : {}
+                void edit({ action: 'rename', columnId: column.id, name: event.currentTarget.elements.name.value, ...colorPatch })
+              } },
+            h(ColumnColorPicker, { t, value: column.color || '', stage: column.stage, columnId: column.id, disabled: busy,
+              onCommit(nextColor, event) {
+                const form = event?.currentTarget?.closest?.('form')
+                const rawName = form?.elements?.name?.value
+                const name = rawName?.trim() ? rawName : columnLabel(t, column)
+                void edit({ action: 'rename', columnId: column.id, name, color: nextColor })
+              } }),
             h('div', { className: 'dsh-tasks-row-name' }, h(TaskInput, { name: 'name', required: true, maxLength: 80, defaultValue: columnLabel(t, column), 'data-dsh-initial-focus': selected === column.id ? '' : undefined, 'aria-label': t('columnName') }),
               h('small', null, t(STAGES[column.stage]) + ' · ' + count + ' ' + t('taskCount'))),
             h('div', { className: 'dsh-tasks-row-tools' }, h(RowAction, { type: 'submit', label: t('rename'), icon: 'check' }),
@@ -3898,8 +6260,14 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
             h(RowAction, { disabled: index === board.columns.length - 1, label: t('later'), icon: 'down', onClick: () => edit({ action: 'reorder', columnId: column.id, before: board.columns[index + 2]?.id || null }) }),
             h(RowAction, { danger: true, disabled: count > 0 || column.id.startsWith('stage:'), label: t('removeColumn'), title: count || column.id.startsWith('stage:') ? t('columnProtected') : t('removeColumn'), icon: 'trash', onClick: () => edit({ action: 'remove', columnId: column.id }) })))
           })))),
-          h('section', null, h(ManageTitle, { title: t('addColumn') }), h('form', { className: 'dsh-tasks-column-form dsh-tasks-manage-create', onSubmit(event) { event.preventDefault(); const fields = event.currentTarget.elements
-            void edit({ action: 'add', name: fields.name.value, stage: fields.stage.value }) } },
+          h('section', null, h(ManageTitle, { title: t('addColumn') }), h('form', { className: 'dsh-tasks-column-form dsh-tasks-manage-create', onSubmit(event) {
+            event.preventDefault()
+            const fields = event.currentTarget.elements
+            const rawColor = fields.color?.value?.trim()
+            void edit({ action: 'add', name: fields.name.value, stage: fields.stage.value, ...(rawColor ? { color: rawColor } : {}) })
+            if (rawColor) setNewColor('')
+          } },
+            h('div', { className: 'dsh-tasks-col-color-field' }, h('span', null, t('color')), h(ColumnColorPicker, { t, value: newColor, stage, disabled: busy, onChange: setNewColor })),
             h('label', null, t('columnName'), h(TaskInput, { name: 'name', maxLength: 80, required: true, 'aria-label': t('addColumn'), placeholder: t('columnName') })),
             h('label', null, t('moveTask'), h(PaperSelect, { t, name: 'stage', value: stage, onChange: event => setStage(event.target.value), 'aria-label': t('moveTask') }, defaults.map(column => h('option', { key: column.stage, value: column.stage }, columnLabel(t, column))))),
             h(TaskButton, { type: 'submit', className: 'dsh-tasks-primary' }, h(Icon, { name: 'plus', size: 14 }), t('addColumn')))))))
@@ -4011,12 +6379,13 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       const max = Math.max(...Object.values(counts))
       return h('section', { className: 'dsh-tasks-due-overview' },
         h('h3', null, h(Icon, { name: 'calendar' }), t('dueOverview')),
-        h('p', null, t('dueScope')),
-        max ? Object.entries(counts).map(([key, count]) => h('button', { key, type: 'button', 'data-period': key,
-          'aria-pressed': selected === key, disabled: !count && selected !== key, onClick: () => change('dueDate', selected === key ? '' : key) },
-          h(Icon, { name: dueIcons[key] }), t(key), h('span', { className: 'dsh-tasks-due-count' }, count),
-          h('span', { className: 'dsh-tasks-due-track', 'aria-hidden': true }, h('span', { style: { width: count / max * 100 + '%' } }))))
-          : h('p', null, t(!open ? 'noOpenTasks' : !dated ? 'noDueDates' : 'noNearDates')))
+        max ? [
+          h('p', null, t('dueScope')),
+          Object.entries(counts).map(([key, count]) => h('button', { key, type: 'button', 'data-period': key,
+            'aria-pressed': selected === key, disabled: !count && selected !== key, onClick: () => change('dueDate', selected === key ? '' : key) },
+            h(Icon, { name: dueIcons[key] }), t(key), h('span', { className: 'dsh-tasks-due-count' }, count),
+            h('span', { className: 'dsh-tasks-due-track', 'aria-hidden': true }, h('span', { style: { width: count / max * 100 + '%' } }))))
+        ] : h('p', { className: 'dsh-tasks-empty-hint' }, t(!open ? 'noOpenTasks' : !dated ? 'noDueDates' : 'noNearDates')))
     }
 
     function ColumnOverview({ t, tasks, columns }) {
@@ -4025,7 +6394,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         const id = taskColumn(task)
         counts.set(id, (counts.get(id) || 0) + 1)
       }
-      const rows = columns.map(column => ({ id: column.id, label: columnLabel(t, column), stage: column.stage, count: counts.get(column.id) || 0 }))
+      const rows = columns.map(column => ({ id: column.id, label: columnLabel(t, column), stage: column.stage, color: column.color, count: counts.get(column.id) || 0 }))
       if (rows.length > 6) {
         const rest = rows.splice(5)
         rows.push({ id: 'other', label: t('otherColumns') + ' · ' + rest.length, count: rest.reduce((sum, row) => sum + row.count, 0) })
@@ -4035,18 +6404,18 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         h('h3', null, h(Icon, { name: 'board' }), t('byColumn')),
         h('ul', { className: 'dsh-tasks-column-mix', role: 'list' }, rows.map(row => h('li', { key: row.id, 'data-stage': row.stage },
           h('span', { title: row.label }, row.label),
-          h('span', { className: 'dsh-tasks-column-meter', 'aria-hidden': true }, h('b', { style: { width: row.count / max * 100 + '%' } })),
+          h('span', { className: 'dsh-tasks-column-meter', 'aria-hidden': true }, h('b', { style: { width: row.count / max * 100 + '%', ...(row.color ? { backgroundColor: row.color } : {}) } })),
           h('strong', null, row.count)))))
     }
 
-    const attentionRank = { approval: 0, question: 1, error: 2, overdue: 3, today: 4, tomorrow: 5, nextWeek: 6, P0: 7, P1: 8 }
-    const attentionIcons = { approval: 'alert', question: 'question', error: 'alert', ...dueIcons, P0: 'tag', P1: 'tag' }
+    const attentionRank = { approval: 0, question: 1, reviewPending: 2, error: 3, reviewReturned: 4, overdue: 5, today: 6, tomorrow: 7, nextWeek: 8, P0: 9, P1: 10 }
+    const attentionIcons = { approval: 'alert', question: 'question', reviewPending: 'check', error: 'alert', reviewReturned: 'comment', ...dueIcons, P0: 'tag', P1: 'tag' }
     function OverviewTaskLists({ t, open, recent, today, statuses, dueFilter, openTask, priorities }) {
       const attention = open.flatMap(task => {
-        const status = runtimeOf(task, statuses), due = dueBucket(task, today)
+        const due = dueBucket(task, today)
         if (dueFilter && due !== dueFilter) return []
         const highPriority = task.priority === 'P0' || task.priority === 'P1'
-        const reason = ['approval', 'question', 'error'].includes(status) ? status : due ?? (highPriority ? task.priority : undefined)
+        const reason = attentionOf(task, statuses) ?? due ?? (highPriority ? task.priority : undefined)
         return reason ? [{ task, reason }] : []
       }).sort((a, b) => attentionRank[a.reason] - attentionRank[b.reason]
         || (a.task.dueDate || '9999-12-31').localeCompare(b.task.dueDate || '9999-12-31')
@@ -4069,7 +6438,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           label: formatDay.format(timestamp), date: task.completedAt, icon: 'check', tone: 'done' }))))
     }
 
-    function WorkspaceInsights({ t, scope, tasks, columns, priorities, today, options, statuses, sync, selected, change, openTask }) {
+    function WorkspaceInsights({ t, scope, tasks, columns, priorities, today, options, statuses, sync, selected, change, openTask, onClose }) {
       const week = Array.from({ length: 7 }, (_, index) => {
         const date = new Date(today + 'T12:00:00')
         date.setDate(date.getDate() + index - 6)
@@ -4090,7 +6459,7 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       }
       const recent = completed.sort((a, b) => b.timestamp - a.timestamp || a.task.id.localeCompare(b.task.id)).slice(0, 5)
       const open = tasks.filter(task => task.stage !== 'done')
-      const blocked = open.filter(task => ['approval', 'question', 'error'].includes(runtimeOf(task, statuses)))
+      const blocked = open.filter(task => attentionOf(task, statuses))
       const rate = tasks.length ? Math.round(100 * done.length / tasks.length) : 0
       function groupBy(keyOf, labelOf) {
         const rows = new Map()
@@ -4113,8 +6482,21 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       const colors = { P0: 'var(--dsw-alias-state-error-primary)', P1: 'var(--dsw-alias-state-warn-primary)', P2: 'var(--dsh-tasks-muted)' }
       return h('aside', { className: 'dsh-tasks-insights', 'aria-label': t('insights') },
         h('div', { className: 'dsh-tasks-insight-body' },
-          h('header', null, h('div', { className: 'dsh-tasks-insight-line' }, h('h2', null, h(Icon, { name: 'chart', size: 16 }), t('insights')),
-            sync === 'live' ? h('span', { className: 'dsh-tasks-insight-sync', 'data-live': true }, t('syncLive')) : null), h('small', null, scope)),
+          h('header', null,
+            h('div', { className: 'dsh-tasks-insight-line' },
+              h('h2', null, h(Icon, { name: 'chart', size: 16 }), t('insights')),
+              h('div', { className: 'dsh-tasks-insight-header-actions' },
+                sync === 'live' ? h('span', { className: 'dsh-tasks-insight-sync', 'data-live': true }, t('syncLive')) : null,
+                onClose ? h(TaskButton, {
+                  className: 'dsh-tasks-icon-button dsh-tasks-insight-close',
+                  title: t('close') || '关闭概览',
+                  'aria-label': t('close') || '关闭概览',
+                  onClick: onClose
+                }, h(Icon, { name: 'close', size: 14 })) : null
+              )
+            ),
+            h('small', null, scope)
+          ),
           h('div', { className: 'dsh-tasks-insight-sections' },
             h('section', { className: 'dsh-tasks-insight-delivery' }, heading('delivery', 'check'),
               h('strong', { className: 'dsh-tasks-rate' }, tasks.length ? rate + '%' : '—'),
@@ -4149,7 +6531,24 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
         h(Icon, { name: 'chevronDown', size: 13 }))
     }
 
-    function BoardSettings({ t, board, actions, renderSlot, openMcp }) {
+    function ShortcutsDialog({ t, onClose }) {
+      const items = [
+        ['/', 'shortcutSearch'],
+        ['N', 'shortcutNew'],
+        ['R', 'shortcutRefresh'],
+        ['I', 'shortcutInsights'],
+        ['?', 'shortcutHelp'],
+      ]
+      return h(Modal, { t, paper: true, focusClose: true, title: t('shortcuts'), onClose },
+        h('div', { className: 'dsh-tasks-dialog-body' },
+          h('p', { className: 'dsh-tasks-field-hint' }, t('shortcutsIntro')),
+          h('ul', { className: 'dsh-tasks-shortcuts-list' },
+            items.map(([key, labelKey]) => h('li', { key }, h('span', null, t(labelKey)), h('kbd', null, key))))),
+        h('div', { className: 'dsh-tasks-form-actions' },
+          h(TaskButton, { className: 'dsh-tasks-primary', type: 'button', onClick: onClose }, t('close'))))
+    }
+
+    function BoardSettings({ t, board, actions, renderSlot, openMcp, openShortcuts, selectMode, toggleSelectMode }) {
       const command = (key, icon, action) => h(TaskButton, { className: 'dsh-tasks-command', onClick(event) {
         const details = event.currentTarget.closest('details')
         details.open = false
@@ -4162,6 +6561,8 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
           h('div', { className: 'dsh-tasks-menu-label' }, t('boardSettings')),
           board ? command('labels', 'tag', () => actions.showColumns('labels')) : null,
           board ? command('columns', 'board', () => actions.showColumns(true)) : null,
+          command(selectMode ? 'batchExit' : 'batchSelect', 'check', toggleSelectMode),
+          command('shortcuts', 'question', openShortcuts),
           command('mcpAccess', 'link', openMcp),
           renderSlot?.(APPEARANCE_SLOT, {})))
     }
@@ -4178,43 +6579,293 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
       return [ref, width]
     }
 
+    function AttentionBar({ t, tasks, statuses, actions, options, workspaceFilter }) {
+      const detailsRef = React.useRef(null)
+      const [open, setOpen] = React.useState(false)
+      const [selectedReason, setSelectedReason] = React.useState(null)
+      const groups = new Map(attentionKinds.map(kind => [kind, []]))
+      for (const task of tasks) {
+        const reason = attentionOf(task, statuses)
+        if (reason) groups.get(reason).push(task)
+      }
+      const entries = [...groups].filter(([, rows]) => rows.length)
+      if (!entries.length) return null
+      const count = entries.reduce((total, [, rows]) => total + rows.length, 0)
+      const activeReason = selectedReason && groups.get(selectedReason)?.length ? selectedReason : null
+      const visibleEntries = activeReason ? entries.filter(([reason]) => reason === activeReason) : entries
+      const tone = groups.get('error').length ? 'danger'
+        : (groups.get('approval').length || groups.get('question').length || groups.get('reviewReturned').length) ? 'warn' : 'action'
+      const firstTask = entries[0][1][0]
+      return h('details', {
+        ref: detailsRef, className: 'dsh-tasks-attention', 'data-needs-attention': count, 'data-attention-tone': tone,
+        onToggle(event) {
+          const isOpen = event.currentTarget.open
+          setOpen(isOpen)
+          if (!isOpen) setSelectedReason(null)
+        },
+      },
+      h('summary', { className: 'dsh-tasks-attention-summary' },
+        h('span', { className: 'dsh-tasks-attention-badge', 'aria-hidden': true }, h(Icon, { name: 'spark', size: 14 })),
+        h('strong', null, t('needsMyAction') + ' · ' + count),
+        h('span', { className: 'dsh-tasks-attention-counts' }, entries.map(([reason, rows]) => h('small', { key: reason, 'data-reason': reason },
+          h('button', {
+            type: 'button',
+            className: 'dsh-tasks-attention-pill',
+            'aria-pressed': activeReason === reason,
+            'data-active': activeReason === reason || undefined,
+            title: t(activeReason === reason ? 'attentionPillShowAll' : 'attentionPillFilter') + ': ' + t(reason),
+            onKeyUp(event) { if (event.key === ' ') event.preventDefault() },
+            onClick(event) {
+              event.preventDefault()
+              event.stopPropagation()
+              const el = detailsRef.current
+              if (entries.length === 1) {
+                const nextOpen = !(el ? el.open : open)
+                if (el) el.open = nextOpen
+                setOpen(nextOpen)
+                setSelectedReason(null)
+                return
+              }
+              if ((el ? el.open : open) && activeReason === reason) {
+                setSelectedReason(null)
+              } else {
+                setSelectedReason(reason)
+                if (el && !el.open) el.open = true
+                setOpen(true)
+              }
+            },
+          }, t(reason) + ' ' + rows.length)))),
+        h('span', { className: 'dsh-tasks-attention-preview', 'aria-hidden': true },
+          h('span', { title: firstTask.title }, firstTask.title),
+          count > 1 ? h('span', { className: 'dsh-tasks-attention-preview-more' }, '+' + (count - 1)) : null),
+        h('span', { className: 'dsh-tasks-attention-toggle', 'aria-hidden': true }, h(Icon, { name: 'chevronDown', size: 14 }))),
+      h('div', { className: 'dsh-tasks-attention-list' }, visibleEntries.map(([reason, rows]) => {
+        const isDelivery = reason === 'reviewPending' || reason === 'reviewReturned'
+        const actionLabel = t(isDelivery ? 'reviewDelivery' : 'openSession')
+        return h('section', { key: reason, 'data-reason': reason, 'aria-label': t(reason) },
+          h('div', { className: 'dsh-tasks-attention-group-head' },
+            h(Icon, { name: attentionIcons[reason] || 'spark', size: 13 }),
+            h('strong', null, t(reason)),
+            h('small', { 'aria-hidden': true }, rows.length),
+            activeReason && entries.length > 1 ? h('button', {
+              type: 'button', className: 'dsh-tasks-attention-show-all',
+              onClick: () => setSelectedReason(null),
+            }, t('attentionShowAll').replace('{count}', String(count))) : null),
+          h('ul', null, rows.map(task => {
+            const ws = !workspaceFilter && options ? workspaceLabel(t, task, options) : ''
+            return h('li', { key: task.id }, h(TaskButton, {
+              className: 'dsh-tasks-attention-item',
+              onClick: () => isDelivery ? actions.openDetails(task.id, 'deliveryTab') : actions.openSession(task.activeSessionId),
+            },
+            h('span', { className: 'dsh-tasks-attention-item-title', title: task.title }, task.title),
+            h('span', { className: 'dsh-tasks-attention-item-meta', 'aria-hidden': true },
+              ws ? h('span', { className: 'dsh-tasks-attention-item-ws', title: ws }, h(Icon, { name: 'folder', size: 11 }), h('span', null, ws)) : null,
+              h('span', { className: 'dsh-tasks-attention-item-action' }, actionLabel, h(Icon, { name: 'chevron', size: 12 })))))
+          })))
+      })))
+    }
+
+    const emptyFilters = {}, emptyColumnTasks = []
+    const BoardAttention = React.memo(AttentionBar)
+    const BoardInsights = React.memo(WorkspaceInsights)
+
     function TaskBoard({ t, useTasks, actions, renderSlot }) {
       const [mcpOpen, setMcpOpen] = React.useState(false)
+      const [shortcutsOpen, setShortcutsOpen] = React.useState(false)
+      const [selectMode, setSelectMode] = React.useState(false)
+      const [selectedIds, setSelectedIds] = React.useState(() => new Set())
+      const [batchBusy, setBatchBusy] = React.useState(false)
+      const [batchDeleteOpen, setBatchDeleteOpen] = React.useState(false)
+      const [batchDeleteError, setBatchDeleteError] = React.useState(undefined)
       const [panelRef, panelWidth] = useBoardWidth()
       React.useEffect(() => { void actions.loadOptions() }, [actions])
-      const { status, errorCode, tasks, hasLoaded, sync, query, form, stages, options, workspaceFilter, collapsed, showAllDone, detailId, editor, launchForm, statuses, navigationError, restore, deletion, board, managing, boardBusy, boardError, filters = {}, matches, searchError, comments, activity, imageJobs } = useTasks(state => state)
+      const { status, errorCode, tasks, hasLoaded, sync, query, form, quickCreating, unlockNotice, sortBy = 'manual', stages, options, workspaceFilter, collapsed, showAllDone, overview, detailId, detailView, editor, launchForm, statuses, navigationError, restore, deletion, board, managing, boardBusy, boardError, filters = emptyFilters, matches, searchError, comments, activity, imageJobs, deliveryMutation } = useTasks(state => state)
       const columns = board?.columns || defaults
-      const collapsedCount = columns.filter(column => collapsed[board ? column.id : column.stage]).length
+      const byId = React.useMemo(() => taskIndex(tasks), [tasks])
+      const detailTask = byId.get(detailId)
+      const launchTarget = byId.get(launchForm?.taskId)
+      const filterCount = Object.values(filters).filter(Boolean).length
+      const hasSort = sortBy !== 'manual'
+      const search = query.trim().toLocaleLowerCase()
+      const filtered = !!search || !!workspaceFilter || !!filterCount
+      const sizes = React.useMemo(() => {
+        const counts = new Map()
+        for (const task of tasks) { const key = taskColumn(task); counts.set(key, (counts.get(key) || 0) + 1) }
+        return counts
+      }, [tasks])
+      const isCollapsed = column => !(search || filterCount) && (collapsed[column.id]
+        ?? (hasLoaded && !filtered && column.stage !== 'done' && column.id !== 'stage:' + column.stage && !sizes.get(column.id)))
+      const collapsedCount = columns.filter(isCollapsed).length
       const expandedCount = columns.length - collapsedCount
       const gaps = Math.max(0, columns.length - 1)
       // Match the CSS gutters; the overview should never be the reason a column has to scroll.
       const gutter = Math.min(boardLayout.maxGutter, Math.max(12, panelWidth * .016))
       const gap = Math.min(boardLayout.maxGap, Math.max(12, panelWidth * .014))
       const required = expandedCount * boardLayout.columnMin + collapsedCount * boardLayout.collapsed + gaps * gap + 3 * gutter + boardLayout.insightsMin
-      const showInsights = !!board && hasLoaded && panelWidth >= Math.max(boardLayout.wide, Math.ceil(required))
-      const priorities = new Map((board?.priorities ?? fallbackPriorities).map(({ key, name }) => [key, name]))
-      for (const { priority } of tasks) if (priority && !priorities.has(priority)) priorities.set(priority, priority)
-      const filterCount = Object.values(filters).filter(Boolean).length
-      const feedback = boardError ? h('p', { className: 'dsh-tasks-feedback', role: 'alert' }, t(boardError === 'tasks/revision-conflict' ? 'boardConflict' : boardError === 'tasks/label-in-use' ? 'labelProtected' : boardError === 'tasks/column-not-empty-or-default' ? 'columnProtected' : 'boardFailed')) : null
+      const canDockInsights = panelWidth >= Math.max(boardLayout.wide, Math.ceil(required))
+      const showInsights = !!board && hasLoaded && !!overview
+      const catalog = board?.priorities ?? fallbackPriorities
+      const extraPriorities = React.useMemo(() => {
+        const known = new Set(catalog.map(row => row.key))
+        return JSON.stringify([...new Set(tasks.map(task => task.priority).filter(key => key && !known.has(key)))].sort())
+      }, [catalog, tasks])
+      const priorities = React.useMemo(() => new Map([
+        ...catalog.map(({ key, name }) => [key, name]), ...JSON.parse(extraPriorities).map(key => [key, key]),
+      ]), [catalog, extraPriorities])
+      const boardFeedback = { 'tasks/revision-conflict': 'boardConflict', 'tasks/label-in-use': 'labelProtected',
+        'tasks/column-not-empty-or-default': 'columnProtected', 'tasks/delivery-review-required': 'deliveryActionRequired' }
+      const feedback = boardError ? h('p', { className: 'dsh-tasks-feedback', role: 'alert' }, t(boardFeedback[boardError] || 'boardFailed')) : null
       const ready = hasLoaded
       const writable = status === 'ready'
-      const writing = taskWritePending({ form, editor, launchForm, deletion, stages })
-      const workspaceTasks = !workspaceFilter ? tasks : tasks.filter(task => workspaceFilter === 'ungrouped' ? !task.workspaceId : task.workspaceId === workspaceFilter)
+      // The modal already prevents interacting with the board while it saves. Keep the
+      // controls behind it stable; the store still enforces the full write lock.
+      const writingBoard = boardWritePending({ form, quickCreating, launchForm, deletion, stages, deliveryMutation })
+      const writing = writingBoard || !!editor?.pending
+      const workspaceTasks = React.useMemo(() => !workspaceFilter ? tasks : tasks.filter(task => workspaceFilter === 'ungrouped'
+        ? !task.workspaceId : task.workspaceId === workspaceFilter), [tasks, workspaceFilter])
+      const hasRunning = React.useMemo(() => workspaceTasks.some(task => task.stage !== 'done' && runtimeOf(task, statuses) === 'running'), [workspaceTasks, statuses])
+      const nowTick = useNowTick(hasRunning)
       const workspaceScope = !workspaceFilter ? t('allWorkspaces') : workspaceLabel(t, { workspaceId: workspaceFilter === 'ungrouped' ? undefined : workspaceFilter }, options)
-      const attention = workspaceTasks.filter(task => task.stage !== 'done' && ['approval', 'question', 'error'].includes(runtimeOf(task, statuses)))
-      const search = query.trim().toLocaleLowerCase()
-      const sorted = [...workspaceTasks].sort((a, b) => a.position - b.position || a.id.localeCompare(b.id))
-      const filtered = !!search || !!workspaceFilter || !!filterCount
       const today = useLocalDay()
-      const scoped = sorted.flatMap(task => {
-        if (filters.labelId && filters.labelId !== task.labelId || filters.priority && filters.priority !== task.priority) return []
-        if (!search || [task.id, task.title, task.brief || ''].some(text => text.toLocaleLowerCase().includes(search))) return [task]
+      const scoped = React.useMemo(() => [...workspaceTasks].sort((a, b) => a.position - b.position || a.id.localeCompare(b.id)).flatMap(task => {
+        if (filters.labelId && filters.labelId !== task.labelId || filters.priority && filters.priority !== task.priority
+          || filters.ready && !isReadyToStart(task, byId)) return []
+        if (!search || [task.id, task.title, task.brief || '', task.acceptanceCriteria || ''].some(text => text.toLocaleLowerCase().includes(search))) return [task]
         return matches?.[task.id] ? [{ ...task, snippet: matches[task.id] }] : []
-      })
-      const matching = filters.dueDate ? scoped.filter(task => dueBucket(task, today) === filters.dueDate) : scoped
+      }), [workspaceTasks, filters.labelId, filters.priority, filters.ready, byId, search, matches])
+      const { tasksByColumn, count } = React.useMemo(() => {
+        const tasksByColumn = new Map()
+        let count = 0
+        for (const task of scoped) {
+          if (filters.dueDate && dueBucket(task, today) !== filters.dueDate) continue
+          const key = board ? taskColumn(task) : 'stage:' + task.stage
+          if (!tasksByColumn.has(key)) tasksByColumn.set(key, [])
+          tasksByColumn.get(key).push(task)
+          count++
+        }
+        for (const [key, rows] of tasksByColumn) {
+          rows.sort((a, b) => a.orderKey < b.orderKey ? -1 : a.orderKey > b.orderKey ? 1 : 0)
+          if (hasSort) tasksByColumn.set(key, sortColumnTasks(rows, sortBy, priorities))
+        }
+        return { tasksByColumn, count }
+      }, [scoped, filters.dueDate, today, !!board, hasSort, sortBy, priorities])
+      const visibleTaskIds = React.useMemo(() => {
+        const ids = []
+        for (const rows of tasksByColumn.values()) for (const row of rows) ids.push(row.id)
+        return ids
+      }, [tasksByColumn])
+      const selectedTasks = React.useMemo(() => [...selectedIds].map(id => byId.get(id)).filter(Boolean), [selectedIds, byId])
+      const toggleSelect = React.useCallback(id => {
+        setSelectedIds(prev => {
+          const next = new Set(prev)
+          if (next.has(id)) next.delete(id)
+          else next.add(id)
+          return next
+        })
+      }, [])
+      const exitSelectMode = React.useCallback(() => {
+        setSelectMode(false)
+        setSelectedIds(new Set())
+        setBatchDeleteOpen(false)
+        setBatchDeleteError(undefined)
+      }, [])
+      const toggleSelectMode = React.useCallback(() => {
+        if (selectMode) exitSelectMode()
+        else setSelectMode(true)
+      }, [selectMode, exitSelectMode])
+      const runBatchMove = async targetColumn => {
+        if (!selectedTasks.length || batchBusy || !writable || writing) return
+        const targets = selectedTasks.filter(task => taskColumn(task) !== targetColumn.id && !(targetColumn.stage === 'done' && deliveryOpen(task)))
+        if (!targets.length) return
+        setBatchBusy(true)
+        try {
+          for (const task of targets) {
+            if (board) await actions.move({ taskId: task.id, expectedRevision: task.revision, columnId: targetColumn.id })
+            else await actions.setStage(task.id, targetColumn.stage)
+          }
+          setSelectedIds(new Set())
+        } finally {
+          setBatchBusy(false)
+        }
+      }
+      const runBatchDone = async () => {
+        if (!selectedTasks.length || batchBusy || !writable || writing) return
+        const targets = selectedTasks.filter(task => task.stage !== 'done' && !unfinishedLaunch(task) && !deliveryOpen(task))
+        if (!targets.length) return
+        setBatchBusy(true)
+        try {
+          for (const task of targets) await actions.setStage(task.id, 'done')
+          setSelectedIds(new Set())
+        } finally {
+          setBatchBusy(false)
+        }
+      }
+      const runBatchDelete = async () => {
+        if (!selectedTasks.length || batchBusy || !writable || writing) return
+        const targets = [...selectedTasks]
+        setBatchBusy(true)
+        setBatchDeleteError(undefined)
+        const failedIds = []
+        let firstErrorCode
+        try {
+          for (const task of targets) {
+            const res = await actions.deleteTaskById(task.id, task.revision)
+            if (!res?.ok) {
+              failedIds.push(task.id)
+              if (!firstErrorCode) firstErrorCode = res?.code
+            }
+          }
+          setSelectedIds(new Set(failedIds))
+          if (!failedIds.length) {
+            setBatchDeleteOpen(false)
+          } else {
+            setBatchDeleteError(
+              firstErrorCode === 'tasks/revision-conflict' ? t('deleteConflict')
+                : firstErrorCode === 'tasks/launch-pending' ? t('deletePendingLaunch')
+                : firstErrorCode === 'tasks/delete-unknown' ? t('deleteUnknown')
+                : failureText(t, firstErrorCode, 'deleteFailed'),
+            )
+          }
+        } finally {
+          setBatchBusy(false)
+        }
+      }
+      React.useEffect(() => {
+        if (!window.addEventListener) return
+        const onKeyDown = event => {
+          if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return
+          const target = event.target
+          if (target?.closest?.('input, textarea, select, [contenteditable="true"], [role="combobox"], [role="textbox"]')) return
+          if (form.open || detailId || launchForm?.open || deletion || restore || managing || mcpOpen || shortcutsOpen || batchDeleteOpen
+            || window.document?.querySelector?.('dialog[open]')) return
+          if (!panelRef.current?.getClientRects?.().length) return
+          if (event.key === '/' && !event.shiftKey) {
+            event.preventDefault()
+            const input = panelRef.current.querySelector('.dsh-tasks-search input, input.dsh-tasks-search')
+            input?.focus({ preventScroll: true })
+          } else if ((event.key === 'n' || event.key === 'N') && !event.shiftKey) {
+            event.preventDefault()
+            actions.openForm()
+          } else if ((event.key === 'r' || event.key === 'R') && !event.shiftKey && status !== 'loading' && !writing) {
+            event.preventDefault()
+            void actions.refresh(); void actions.loadOptions()
+          } else if ((event.key === 'i' || event.key === 'I') && !event.shiftKey && board && ready) {
+            event.preventDefault()
+            actions.toggleOverview()
+          } else if (event.key === '?') {
+            event.preventDefault()
+            setShortcutsOpen(true)
+          } else if (event.key === 'Escape' && selectMode) {
+            event.preventDefault()
+            exitSelectMode()
+          }
+        }
+        window.addEventListener('keydown', onKeyDown)
+        return () => window.removeEventListener('keydown', onKeyDown)
+      }, [actions, board, ready, status, writing, form.open, detailId, launchForm?.open, deletion, restore, managing, mcpOpen, shortcutsOpen, batchDeleteOpen, selectMode, exitSelectMode])
       const message = status === 'loading' ? t('loading') : status === 'error'
         ? failureText(t, errorCode, 'loadFailed')
-        : tasks.length ? t(filtered ? 'matched' : 'total') + ': ' + matching.length : t('loaded')
+        : tasks.length ? t(filtered ? 'matched' : 'total') + ': ' + count : t('loaded')
       const empty = key => t(ready ? filtered ? 'noMatches' : key
         : status === 'loading' ? 'loading' : 'listUnavailable')
       return h(
@@ -4234,54 +6885,171 @@ body[data-dsh-paper-theme="paper"] .dsh-tasks-root .dsh-tasks-confirm-dialog .ds
               'aria-label': t('search'), title: t('search'), value: query, onChange: event => actions.setQuery(event.target.value),
             })),
             board ? h(Dropdown, { className: 'dsh-tasks-filter' },
-              h('summary', { className: 'dsh-tasks-toolbar-button', title: t('filter'), 'aria-label': filterCount ? t('filter') + ' · ' + t('filterCount') + ': ' + filterCount : t('filter') },
-                h(Icon, { name: 'filter' }), h('span', { className: 'dsh-tasks-filter-label' }, t('filter')), filterCount ? h('span', { className: 'dsh-tasks-counter', 'aria-hidden': true }, filterCount) : null),
+              h('summary', { className: 'dsh-tasks-toolbar-button', title: t('filter'), 'aria-label': filterCount + (hasSort ? 1 : 0) ? t('filter') + ' · ' + t('filterCount') + ': ' + (filterCount + (hasSort ? 1 : 0)) : t('filter') },
+                h(Icon, { name: 'filter' }), h('span', { className: 'dsh-tasks-filter-label' }, t('filter')), filterCount + (hasSort ? 1 : 0) ? h('span', { className: 'dsh-tasks-counter', 'aria-hidden': true }, filterCount + (hasSort ? 1 : 0)) : null),
               h('div', { className: 'dsh-tasks-menu dsh-tasks-filter-panel', popover: 'manual' },
-                h('div', { className: 'dsh-tasks-filter-head' }, h('strong', null, t('filter')), h(TaskButton, { className: 'dsh-tasks-text-action', disabled: !filterCount, onClick(event) {
+                h('div', { className: 'dsh-tasks-filter-head' }, h('strong', null, t('filter')), h(TaskButton, { className: 'dsh-tasks-text-action', disabled: !filterCount && !hasSort, onClick(event) {
                   event.currentTarget.closest('.dsh-tasks-filter-panel').querySelector('[role="combobox"]').focus({ preventScroll: true })
                   actions.clearFilters()
                 } }, t('resetFilters'))),
-                h(Properties, { t, board, priorities, values: filters, change: actions.setFilter, filter: true }))) : null),
+                h(Properties, { t, board, priorities, values: filters, change: actions.setFilter, filter: true }),
+                h('label', null, t('sortBy'), h(PaperSelect, {
+                  t, className: 'dsh-tasks-stage', name: 'sortBy', 'aria-label': t('sortBy'), value: sortBy,
+                  onChange: event => actions.setSortBy(event.target.value),
+                }, SORT_MODES.map(mode => h('option', { key: mode, value: mode }, t(SORT_LABELS[mode]))))),
+                h(TaskButton, { className: 'dsh-tasks-ready-filter', 'aria-pressed': !!filters.ready,
+                  onClick: () => actions.setFilter('ready', !filters.ready) }, h(Icon, { name: 'check', size: 14 }), t('dependencyReady')))) : null),
           h('div', { className: 'dsh-tasks-toolbar-actions' },
-            h(BoardSettings, { t, board, actions, renderSlot, openMcp: () => setMcpOpen(true) }),
+            board && ready ? h(TaskButton, { className: 'dsh-tasks-icon-button dsh-tasks-toolbar-button dsh-tasks-toolbar-icon',
+              'aria-label': t('insights'), title: t('insights'), 'aria-expanded': showInsights, onClick: actions.toggleOverview }, h(Icon, { name: 'chart' })) : null,
+            h(BoardSettings, { t, board, actions, renderSlot, openMcp: () => setMcpOpen(true), openShortcuts: () => setShortcutsOpen(true), selectMode, toggleSelectMode }),
             h(TaskButton, { className: 'dsh-tasks-icon-button dsh-tasks-toolbar-button dsh-tasks-toolbar-icon', onClick: () => { void actions.refresh(); void actions.loadOptions() },
               'aria-label': t('refresh'), title: t('refresh'), disabled: status === 'loading' || writing }, h(Icon, { name: 'refresh' })),
             h(TaskButton, { className: 'dsh-tasks-primary dsh-tasks-toolbar-button', onClick: () => actions.openForm(),
               'aria-haspopup': 'dialog', 'aria-expanded': form.open, 'aria-label': t(form.retryInput || form.pending ? 'resumeCreate' : 'newTask'),
               title: t(form.retryInput || form.pending ? 'resumeCreate' : 'newTask') }, h(Icon, { name: 'plus' }),
               h('span', { className: 'dsh-tasks-create-label' }, t(form.retryInput || form.pending ? 'resumeCreate' : 'newTask'))))),
+        h(BoardAttention, { t, tasks: workspaceTasks, statuses, actions, options, workspaceFilter }),
         mcpOpen ? h(McpAccessDialog, { t, manage: actions.mcpAccess, onClose: () => setMcpOpen(false) }) : null,
-        form.open ? h(CreateForm, { t, form, actions, writable, options, board, boardBusy, priorities, jobs: imageJobs?.draft }) : null,
+        shortcutsOpen ? h(ShortcutsDialog, { t, onClose: () => setShortcutsOpen(false) }) : null,
+        form.open ? h(CreateForm, { t, form, actions, writable, options, board, boardBusy, priorities, byId, jobs: imageJobs?.draft }) : null,
         searchError ? h('p', { role: 'alert' }, t('searchFailed'), h(TaskButton, { onClick: actions.retrySearch }, t('retry'))) : null,
         managing && board ? h(managing === 'labels' ? LabelManager : ColumnManager, { t, board, actions, tasks, selected: managing, busy: boardBusy || !writable || sync !== 'live', error: feedback }) : feedback,
         navigationError ? h('p', { className: 'dsh-tasks-feedback', role: 'alert' }, failureText(t, navigationError, 'navigationFailed')) : null,
-        launchForm?.open && tasks.some(task => task.id === launchForm.taskId)
-          ? h(LaunchForm, { t, form: launchForm, jobs: imageJobs?.[launchForm.taskId], task: tasks.find(task => task.id === launchForm.taskId), options, actions, writable,
-            runtime: runtimeOf(tasks.find(task => task.id === launchForm.taskId), statuses) }) : null,
-        attention.length ? h('details', { className: 'dsh-tasks-feedback dsh-tasks-attention', style: { margin: '0 24px 12px' } },
-          h('summary', null, attention.length + ' ' + t('attention')),
-          attention.map(task => h('p', { key: task.id }, task.title + ' · ' + t(runtimeOf(task, statuses)) + ' ',
-            h(TaskButton, { className: 'dsh-tasks-retry', type: 'button', onClick: () => actions.openSession(task.activeSessionId) }, t('openSession'))))) : null,
-        detailId && tasks.some(task => task.id === detailId)
-          ? h(TaskDetails, { key: detailId, t, priorities, task: tasks.find(task => task.id === detailId), runtime: runtimeOf(tasks.find(task => task.id === detailId), statuses), column: columns.find(column => column.id === taskColumn(tasks.find(task => task.id === detailId))), editor, board, draft: comments?.[detailId], jobs: imageJobs?.[detailId], activity, options, actions, writable, writing }) : null,
+        launchForm?.open && launchTarget ? h(LaunchForm, { t, form: launchForm, jobs: imageJobs?.[launchForm.taskId], task: launchTarget,
+          options, actions, writable, runtime: runtimeOf(launchTarget, statuses), dependenciesBlocked: !!blockersOf(launchTarget, byId).length }) : null,
+        detailTask ? h(TaskDetails, { key: detailId, t, priorities, task: detailTask, runtime: runtimeOf(detailTask, statuses),
+          column: columns.find(column => column.id === taskColumn(detailTask)), editor, board, draft: comments?.[detailId], jobs: imageJobs?.[detailId],
+          activity, options, actions, writable, writing, byId, view: detailView,
+          mutation: deliveryMutation?.input.taskId === detailId && deliveryMutation.input.deliveryId === detailTask.delivery?.id ? deliveryMutation : undefined }) : null,
         deletion ? h(DeleteDialog, { t, deletion, actions, writable }) : null,
+        selectMode && batchDeleteOpen ? h(Modal, {
+          t,
+          title: t('batchConfirmDelete').replace('{count}', String(selectedTasks.length)),
+          dismissDisabled: batchBusy,
+          onClose: () => { if (!batchBusy) { setBatchDeleteOpen(false); setBatchDeleteError(undefined) } },
+        },
+        h('div', { className: 'dsh-tasks-dialog-body' },
+          selectedTasks.slice(0, 5).map(task => h('p', { key: task.id, className: 'dsh-tasks-delete-title' }, task.title)),
+          selectedTasks.length > 5 ? h('p', null, t('batchDeleteMore').replace('{count}', String(selectedTasks.length - 5))) : null,
+          h('p', null, t('deleteNotice')),
+          batchDeleteError ? h('p', { className: 'dsh-tasks-feedback', role: 'alert' }, batchDeleteError) : null),
+        h('div', { className: 'dsh-tasks-form-actions' },
+          h('span', { className: 'dsh-tasks-spacer' }),
+          h(TaskButton, {
+            className: 'dsh-tasks-secondary',
+            'data-dsh-initial-focus': '',
+            disabled: batchBusy,
+            onClick: () => { setBatchDeleteOpen(false); setBatchDeleteError(undefined) },
+          }, t('cancelDelete')),
+          h(TaskButton, {
+            className: 'dsh-tasks-primary dsh-tasks-danger',
+            disabled: !writable || batchBusy || !selectedTasks.length,
+            onClick: () => { void runBatchDelete() },
+          }, t(batchBusy ? 'deleting' : 'batchDelete')))) : null,
         restore ? h(RestoreDialog, { t, restore, actions }) : null,
-        filters.dueDate ? h('button', { type: 'button', className: 'dsh-tasks-due-chip', 'aria-label': t('removeDue') + ': ' + t(filters.dueDate), onClick: () => actions.setFilter('dueDate', '') },
-          h(Icon, { name: dueIcons[filters.dueDate] }), t(filters.dueDate), h(Icon, { name: 'close', size: 12 })) : null,
-        h('div', { className: 'dsh-tasks-workspace', 'data-show-insights': showInsights || undefined,
+        filterCount || hasSort ? (() => {
+          const activeLabel = filters.labelId ? (board?.labels ?? []).find(row => row.id === filters.labelId) : undefined
+          const labelText = activeLabel?.name || filters.labelId
+          const priorityText = filters.priority ? priorityLabel(priorities, filters.priority) : ''
+          const activeChipCount = filterCount + (hasSort ? 1 : 0)
+          return h('div', { className: 'dsh-tasks-active-filters', role: 'group', 'aria-label': t('filterCount') },
+            filters.labelId ? h('button', {
+              type: 'button', className: 'dsh-tasks-filter-chip', 'data-filter-key': 'labelId',
+              'aria-label': t('removeFilter') + ': ' + t('labelId') + ' ' + labelText,
+              onClick: () => actions.setFilter('labelId', ''),
+            },
+            activeLabel?.color ? h('span', { className: 'dsh-tasks-filter-chip-swatch', 'aria-hidden': true, style: { background: activeLabel.color } }) : h(Icon, { name: 'tag', size: 12 }),
+            h('span', { className: 'dsh-tasks-filter-chip-key' }, t('labelId')),
+            h('span', { className: 'dsh-tasks-filter-chip-value', title: labelText }, labelText),
+            h(Icon, { name: 'close', size: 12 })) : null,
+            filters.priority ? h('button', {
+              type: 'button', className: 'dsh-tasks-filter-chip', 'data-filter-key': 'priority', 'data-priority': filters.priority,
+              'aria-label': t('removeFilter') + ': ' + t('priority') + ' ' + priorityText,
+              onClick: () => actions.setFilter('priority', ''),
+            },
+            h(Icon, { name: 'flag', size: 12 }),
+            h('span', { className: 'dsh-tasks-filter-chip-key' }, t('priority')),
+            h('span', { className: 'dsh-tasks-filter-chip-value', title: priorityText }, priorityText),
+            h(Icon, { name: 'close', size: 12 })) : null,
+            filters.dueDate ? h('button', {
+              type: 'button', className: 'dsh-tasks-due-chip', 'data-filter-key': 'dueDate', 'data-overdue': filters.dueDate === 'overdue' || undefined,
+              'aria-label': t('removeDue') + ': ' + t(filters.dueDate),
+              onClick: () => actions.setFilter('dueDate', ''),
+            },
+            h(Icon, { name: dueIcons[filters.dueDate] || 'calendar', size: 12 }),
+            h('span', { className: 'dsh-tasks-filter-chip-value' }, t(filters.dueDate)),
+            h(Icon, { name: 'close', size: 12 })) : null,
+            filters.ready ? h('button', {
+              type: 'button', className: 'dsh-tasks-filter-chip', 'data-filter-key': 'ready',
+              'aria-label': t('removeFilter') + ': ' + t('dependencyReady'),
+              onClick: () => actions.setFilter('ready', false),
+            },
+            h(Icon, { name: 'check', size: 12 }),
+            h('span', { className: 'dsh-tasks-filter-chip-value' }, t('dependencyReady')),
+            h(Icon, { name: 'close', size: 12 })) : null,
+            hasSort ? h('button', {
+              type: 'button', className: 'dsh-tasks-filter-chip', 'data-filter-key': 'sortBy',
+              'aria-label': t('removeSort') + ': ' + t(SORT_LABELS[sortBy]),
+              onClick: () => actions.setSortBy('manual'),
+            },
+            h(Icon, { name: 'move', size: 12 }),
+            h('span', { className: 'dsh-tasks-filter-chip-key' }, t('sortBy')),
+            h('span', { className: 'dsh-tasks-filter-chip-value' }, t(SORT_LABELS[sortBy])),
+            h(Icon, { name: 'close', size: 12 })) : null,
+            activeChipCount >= 2 ? h('button', { type: 'button', className: 'dsh-tasks-filter-clear', onClick: actions.clearFilters }, t('resetFilters')) : null)
+        })() : null,
+        h('div', { className: 'dsh-tasks-workspace', 'data-show-insights': showInsights && canDockInsights || undefined,
+          'data-overlay-insights': showInsights && !canDockInsights || undefined,
           style: { '--dsh-tasks-expanded': expandedCount, '--dsh-tasks-collapsed': collapsedCount, '--dsh-tasks-gaps': gaps } },
-        board && ready ? h(WorkspaceInsights, { t, scope: workspaceScope, tasks: scoped, columns, priorities, options, statuses, sync, today,
-          selected: filters.dueDate, change: actions.setFilter, openTask: actions.openDetails }) : null,
+        board && ready ? h(BoardInsights, { t, scope: workspaceScope, tasks: scoped, columns, priorities, options, statuses, sync, today,
+          selected: filters.dueDate, change: actions.setFilter, openTask: actions.openDetails, onClose: actions.toggleOverview }) : null,
         h(DragBoard, { t, onMove: actions.move, onColumnOrder: (id, target, side, revision) => reorderColumn(board, actions, id, target, side, revision) }, h(
           'div',
           { className: 'dsh-tasks-board dsh-tasks-board-strip', role: 'region', 'aria-label': t('boardColumns'), tabIndex: 0 },
-          columns.map(column => h(Column, {
+          columns.map(column => h(BoardColumn, {
             key: column.id, t, stage: column.stage, column, board, name: columnLabel(t, column), empty: empty({ todo: 'emptyTodo', doing: 'emptyDoing', done: 'emptyDone' }[column.stage]),
-            ready, tasks: matching.filter(task => board ? taskColumn(task) === column.id : task.stage === column.stage).sort((left, right) => left.orderKey < right.orderKey ? -1 : left.orderKey > right.orderKey ? 1 : 0),
-            total: tasks.filter(task => board ? taskColumn(task) === column.id : task.stage === column.stage).length, filtered,
-            stages, actions, writable: writable && (!board || sync === 'live'), writing: writing || boardBusy, options, collapsed: collapsed[board ? column.id : column.stage], showAllDone: showAllDone[column.id], statuses, priorities,
+            ready, tasks: tasksByColumn.get(column.id) ?? emptyColumnTasks,
+            total: sizes.get(column.id) ?? 0, filtered, sortBy, allowCollapse: !search && !filterCount,
+            stages, actions, writable: writable && (!board || sync === 'live'), writing: writingBoard || boardBusy, options,
+            collapsed: isCollapsed(column), showAllDone: showAllDone[column.id], statuses, priorities, byId, today, workspaceFilter,
+            selectMode, selectedIds, onToggleSelect: toggleSelect, nowTick: hasRunning ? nowTick : undefined,
           })),
         ))),
+        selectMode ? h('div', { className: 'dsh-tasks-batch-bar', role: 'region', 'aria-label': t('batchSelect') },
+          h('span', { className: 'dsh-tasks-batch-count' }, t('batchSelected').replace('{count}', String(selectedTasks.length))),
+          h('div', { className: 'dsh-tasks-batch-actions' },
+            h(TaskButton, { className: 'dsh-tasks-secondary', disabled: batchBusy || !visibleTaskIds.length, onClick: () => setSelectedIds(new Set(visibleTaskIds)) }, t('batchSelectAll')),
+            selectedTasks.length ? h(TaskButton, { className: 'dsh-tasks-secondary', disabled: batchBusy, onClick: () => setSelectedIds(new Set()) }, t('batchClear')) : null,
+            h(Dropdown, { className: 'dsh-tasks-batch-move' },
+              h('summary', { className: 'dsh-tasks-secondary', 'aria-disabled': !selectedTasks.length || batchBusy || !writable || writing || undefined }, t('batchMoveTo')),
+              h('div', { className: 'dsh-tasks-menu dsh-tasks-command-list', popover: 'manual' },
+                columns.map(column => h(TaskButton, {
+                  key: column.id, className: 'dsh-tasks-command',
+                  disabled: !selectedTasks.length || batchBusy || !writable || writing,
+                  onClick(event) {
+                    event.currentTarget.closest('details').open = false
+                    void runBatchMove(column)
+                  },
+                }, columnLabel(t, column))))),
+            h(TaskButton, { className: 'dsh-tasks-primary', disabled: !selectedTasks.length || batchBusy || !writable || writing, onClick: runBatchDone }, t('batchMarkDone')),
+            h(TaskButton, {
+              className: 'dsh-tasks-secondary dsh-tasks-danger',
+              disabled: !selectedTasks.length || batchBusy || !writable || writing,
+              onClick: () => { setBatchDeleteError(undefined); setBatchDeleteOpen(true) },
+            }, t('batchDelete')),
+            h(TaskButton, { className: 'dsh-tasks-secondary', disabled: batchBusy, onClick: exitSelectMode }, t('batchExit')))) : null,
+        unlockNotice ? h('div', { className: 'dsh-tasks-unlock-toast', role: 'status', 'aria-live': 'polite' },
+          h('span', { className: 'dsh-tasks-unlock-icon', 'aria-hidden': true }, h(Icon, { name: 'check', size: 13 })),
+          h('div', { className: 'dsh-tasks-unlock-body' },
+            h('strong', null, t('unlockedNotice').replace('{count}', String(unlockNotice.tasks.length))),
+            h('div', { className: 'dsh-tasks-unlock-links' },
+              unlockNotice.tasks.slice(0, 2).map(item => h('button', {
+                key: item.id, type: 'button', className: 'dsh-tasks-unlock-link', title: item.title,
+                onClick: () => { actions.dismissUnlockNotice(); actions.openDetails(item.id) },
+              }, item.title)),
+              unlockNotice.tasks.length > 2 ? h('span', { className: 'dsh-tasks-unlock-more' }, '+' + (unlockNotice.tasks.length - 2)) : null)),
+          h(TaskButton, { className: 'dsh-tasks-icon-button', 'aria-label': t('close'), title: t('close'), onClick: actions.dismissUnlockNotice }, h(Icon, { name: 'close', size: 13 }))) : null,
         h('div', { className: 'dsh-tasks-footnote dsh-tasks-board-view-footer', role: status === 'error' ? 'alert' : 'status' },
           h('span', null, h(Icon, { name: 'board', size: 12 }), message),
           h('span', { 'data-task-sync': sync }, t(sync === 'live' ? 'syncLive' : sync === 'offline' ? 'syncOffline' : 'syncConnecting')),

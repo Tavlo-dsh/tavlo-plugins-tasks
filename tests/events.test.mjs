@@ -93,6 +93,63 @@ test('attachment events rebase drafts but never change pending or uncertain save
   assert.equal(client.tasks.getSnapshot().editor.brief, 'Local text')
 })
 
+test('a detail save changes one task once, regardless of whether the RPC or SSE arrives first', async t => {
+  for (const streamFirst of [false, true]) await t.test(streamFirst ? 'SSE first' : 'RPC first', async t => {
+    const transport = streamTransport(), initial = record(), other = record({ id: 'other' })
+    let finishUpdate
+    const client = await mountClient(t, { call(_channel, _endpoint, { operation, input }) {
+      if (operation !== 'update') return Promise.resolve(emptyList())
+      return new Promise(resolve => { finishUpdate = task => resolve({ ok: true, value: {
+        task, mutation: { requestId: input.requestId },
+      }, streamId: 'host-1', sequence: 1 }) })
+    } }, { fetch: transport.fetch })
+    const stream = transport.connections[0]
+    stream.send(baseline([initial, other]))
+    await until(() => client.tasks.getSnapshot().sync === 'live')
+    const getTasks = () => client.tasks.getSnapshot().tasks
+    const before = getTasks()
+    const projections = new Set([before])
+    client.tasks.subscribe(() => projections.add(getTasks()))
+    client.tasks.openDetails(initial.id)
+    client.tasks.editDetails('title', 'Revised locally')
+    const saving = client.tasks.saveDetails(), task = { ...initial, title: 'Revised locally', revision: 2 }
+    assert.equal(getTasks(), before)
+    if (streamFirst) {
+      stream.send(change(task))
+      await until(() => getTasks()[0].revision === 2)
+    }
+    finishUpdate(task)
+    await saving
+    assert.equal(client.tasks.getSnapshot().editor, undefined)
+    assert.equal(getTasks()[1], before[1])
+    assert.equal(getTasks()[0].title, task.title)
+    if (!streamFirst) stream.send(change(task))
+    stream.send(change({ ...other, title: 'Next event', revision: 2 }, 2))
+    await until(() => getTasks()[1].revision === 2)
+    assert.equal(projections.size, 3, 'initial, one edit, then the unrelated follow-up event')
+  })
+})
+
+test('title updates leave existing comment-only matches visible while the same search refreshes', async t => {
+  const transport = streamTransport(), timers = clock(), initial = record({ commentCount: 1 })
+  const client = await mountClient(t, { async call(_channel, _endpoint, { operation }) {
+    return operation === 'comment-matches' ? { ok: true, value: { matches: { [initial.id]: 'comment hit' } } } : emptyList()
+  } }, { fetch: transport.fetch, timers })
+  const stream = transport.connections[0]
+  stream.send(baseline([initial]))
+  await until(() => client.tasks.getSnapshot().sync === 'live')
+  client.tasks.setQuery('comment hit')
+  timers.fire(180)
+  await until(() => client.tasks.getSnapshot().matches?.[initial.id])
+  const matches = client.tasks.getSnapshot().matches
+  stream.send(change({ ...initial, title: 'Remote title', revision: 2 }))
+  await until(() => client.tasks.getSnapshot().tasks[0].revision === 2)
+  assert.equal(client.tasks.getSnapshot().matches, matches)
+  assert(client.render().some(node => node.props?.className === 'dsh-tasks-card-brief dsh-tasks-match-snippet'))
+  client.tasks.setQuery('different')
+  assert.equal(client.tasks.getSnapshot().matches, undefined)
+})
+
 test('a late upload response cannot erase a newer remote text conflict received by SSE', async t => {
   const transport = streamTransport()
   let finishUpload
@@ -155,15 +212,15 @@ test('done-range controls appear only for truncated columns and expand independe
   const ranges = () => client.render().filter(node => node.props?.className === 'dsh-tasks-done-range')
   const articles = () => client.render().filter(node => node.type === 'article')
   assert.equal(ranges().length, 2)
-  assert.equal(articles().length, 23)
+  assert.equal(articles().length, 11)
   ranges()[0].props.onClick()
-  assert.equal(articles().length, 24)
+  assert.equal(articles().length, 18)
   assert.deepEqual(ranges().map(node => node.props['aria-pressed']), [true, false])
   client.tasks.setQuery('同步任务')
   assert.equal(ranges().length, 0)
   assert.equal(articles().length, 25)
   client.tasks.setQuery('')
-  assert.equal(articles().length, 24)
+  assert.equal(articles().length, 18)
 })
 
 test('insights render regardless of fullscreen and count only known completion times', async t => {

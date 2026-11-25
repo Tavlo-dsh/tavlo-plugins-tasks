@@ -79,3 +79,40 @@ test('interrupted v5 column backfill resumes despite unit version already advanc
   assert.deepEqual(tasks.map(task => task.id), fixture.orderedIds)
   assert(tasks.every(task => task.columnId === 'stage:' + task.stage && task.revision === fixture.document.tables.tasks[task.id].revision))
 })
+
+test('columns support optional custom #rrggbb colors across add, rename, clear and restart', async context => {
+  const host = await mountHost(context)
+  const call = (operation, input) => callTask(host.rpc, operation, input)
+  const edit = input => call('edit-columns', input)
+
+  const added = ok(await edit({ expectedRevision: 1, action: 'add', name: 'Blocked', stage: 'doing', color: '#d96b6b' })).board
+  const custom = added.columns.at(-1)
+  assert.equal(custom.color, '#d96b6b')
+
+  // Omitting color on rename preserves the existing color; passing a new hex updates it.
+  const kept = ok(await edit({ expectedRevision: 2, action: 'rename', columnId: custom.id, name: 'Paused' })).board
+  assert.equal(kept.columns.find(col => col.id === custom.id).color, '#d96b6b')
+
+  const recolored = ok(await edit({ expectedRevision: 3, action: 'rename', columnId: custom.id, name: 'Paused', color: '#2d9d9c' })).board
+  assert.equal(recolored.columns.find(col => col.id === custom.id).color, '#2d9d9c')
+
+  // Default columns also support setting and clearing custom colors.
+  const defaultColored = ok(await edit({ expectedRevision: 4, action: 'rename', columnId: 'stage:todo', name: 'Backlog', color: '#e5b94c' })).board
+  assert.equal(defaultColored.columns.find(col => col.id === 'stage:todo').color, '#e5b94c')
+
+  // Passing color: null clears custom color and restores absence on persisted row.
+  const clearedCustom = ok(await edit({ expectedRevision: 5, action: 'rename', columnId: custom.id, name: 'Paused', color: null })).board
+  assert.equal('color' in clearedCustom.columns.find(col => col.id === custom.id), false)
+
+  // Invalid color formats are rejected cleanly.
+  assert.equal((await edit({ expectedRevision: 6, action: 'add', name: 'Bad', stage: 'doing', color: 'red' })).ok, false)
+  assert.equal((await edit({ expectedRevision: 6, action: 'rename', columnId: custom.id, name: 'Bad', color: '#123' })).ok, false)
+
+  await host.shutdown()
+  const reopened = await mountHost(context, { storageRoot: host.storageRoot })
+  const after = ok(await callTask(reopened.rpc, 'board', {})).board
+  assert.equal(after.columns.find(col => col.id === 'stage:todo').color, '#e5b94c')
+  assert.equal('color' in after.columns.find(col => col.id === custom.id), false)
+  ok(await callTask(reopened.rpc, 'edit-columns', { expectedRevision: 6, action: 'rename', columnId: 'stage:todo', name: 'To do', color: null }))
+  assert.equal('color' in ok(await callTask(reopened.rpc, 'board', {})).board.columns.find(col => col.id === 'stage:todo'), false)
+})

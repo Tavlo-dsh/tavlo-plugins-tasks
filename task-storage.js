@@ -10,6 +10,9 @@ import { validateTaskRecords } from './task-store.js'
 import { boardSchema, defaultColumn, initialBoard } from './task-board.js'
 
 export const TASK_SQLITE_BACKEND = 'tavlo-tasks-sqlite'
+// Requirements and delivery add optional data without a migration or backfill.
+// A version bump would prevent rollback even before any new data is saved. An
+// older strict reader will instead refuse rows only after new fields are used.
 export const sqliteTaskDomain = { ...taskDomain, tables: boardTables, version: 8, compatibleVersions: [1, 2, 3, 4, 5, 6, 7], global: {
   initial: {},
   schema: z.strictObject({ migration: z.strictObject({

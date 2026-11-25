@@ -4,7 +4,8 @@ export const stages = ['todo', 'doing', 'done']
 export const defaultColumn = stage => 'stage:' + stage
 export const columnId = z.union([z.uuid(), z.enum(stages.map(defaultColumn))])
 export const columnName = z.string().trim().min(1).max(80)
-export const labelFields = { name: columnName, color: z.string().regex(/^#[0-9a-f]{6}$/i) }
+export const columnColor = z.string().regex(/^#[0-9a-f]{6}$/i)
+export const labelFields = { name: columnName, color: columnColor }
 export const priorityKey = z.string().trim().min(1).max(32)
 export const priorityFields = { key: priorityKey, name: z.string().trim().min(1).max(80) }
 export const priorityCapacity = 100
@@ -13,7 +14,7 @@ const priorities = z.array(z.strictObject(priorityFields)).max(priorityCapacity)
 // Absent means defaults; an explicitly empty catalog stays empty.
 export const boardPriorities = board => board.priorities ?? ['P0', 'P1', 'P2'].map(key => ({ key, name: key }))
 export const boardSchema = z.strictObject({ revision: z.number().int().positive(), labels: z.array(z.strictObject({ id: z.uuid(), ...labelFields })).max(100).refine(rows => new Set(rows.map(row => row.id)).size === rows.length).optional(), priorities: priorities.optional(), columns: z.array(z.strictObject({
-  id: columnId, stage: z.enum(stages), name: columnName.optional(),
+  id: columnId, stage: z.enum(stages), name: columnName.optional(), color: columnColor.optional(),
 })).max(100) }).refine(({ columns }) => new Set(columns.map(column => column.id)).size === columns.length
   && stages.every(stage => columns.some(column => column.id === defaultColumn(stage) && column.stage === stage))
   && columns.every(column => column.id === defaultColumn(column.stage) || !!column.name))

@@ -7,7 +7,7 @@ import { findTools, loadShell, readClientInputs, readAppearanceClient, mount, re
 
 // Exercise the installed client using the shipped DSH shell and theme components.
 // All network requests and task changes remain inside this in-memory fixture.
-const output = resolve(process.env.TASK_DETAIL_FILES_OUTPUT || '../artifacts/task-detail-0.2.1')
+const output = resolve(process.env.TASK_DETAIL_FILES_OUTPUT || '../artifacts/task-detail-0.2.2')
 const findings = { passed: false, checks: [], screenshots: [], layouts: [], isolation: 'Synthetic .test origin; requests intercepted; no real tasks or sessions changed.' }
 const check = message => { findings.checks.push(message); console.log('PASS: ' + message) }
 const now = new Date().toISOString()
@@ -15,7 +15,7 @@ const seedId = '11111111-1111-4111-8111-111111111111'
 const task = (id, title, fields = {}) => ({ id, title, stage: 'todo', columnId: 'stage:todo', orderKey: '1', position: 1, revision: 1,
   brief: '支持通用任务文件，提升表单与动态的阅读体验。', createdAt: now, updatedAt: now, ...fields })
 const rows = new Map([[seedId, task(seedId, '任务详情优化', { priority: 'P1' })]])
-const attachments = new Map(), contents = new Map(), events = new Map()
+const attachments = new Map(), contents = new Map(), events = new Map(), launches = []
 const board = { revision: 1, columns: ['todo', 'doing', 'done'].map(stage => ({ id: 'stage:' + stage, stage })), labels: [], priorities: ['P0', 'P1', 'P2'].map(key => ({ key, name: key })) }
 const limits = { maxFiles: 10, maxFileBytes: 10485760, maxImageBytes: 10485760, mediaTypes: ['image/png', 'image/jpeg', 'image/webp'] }
 const ok = value => ({ ok: true, value })
@@ -40,6 +40,13 @@ const fixture = {
       case 'files': return ok({ files: attachments.get(input.taskId) || [], limits, ...(input.taskId ? { revision: current(input.taskId).revision } : {}) })
       case 'images': return ok({ images: (attachments.get(input.taskId) || []).filter(file => file.width), limits: { ...limits, maxImages: 10 }, revision: current(input.taskId).revision })
       case 'history': return ok({ events: events.get(input.taskId) || [] })
+      case 'launch': {
+        const previous = current(input.taskId), sessionId = randomUUID()
+        assert.equal(input.expectedRevision, previous.revision)
+        const row = { ...previous, activeSessionId: sessionId, revision: previous.revision + 1 }
+        rows.set(row.id, row); launches.push(input)
+        return ok({ task: row, sessionId })
+      }
       case 'create': {
         const row = task(randomUUID(), input.title, { brief: input.brief || '' })
         rows.set(row.id, row); addEvent(row.id, 'created')
@@ -140,7 +147,24 @@ try {
   await filesRegion().getByText('empty.txt', { exact: true }).waitFor({ state: 'hidden' })
   assert.equal(newTask.fileCount, 2)
   check('移除单个附件后计数正确')
-  await page.keyboard.press('Escape'); await drawer.waitFor({ state: 'hidden' })
+  await drawer.getByRole('button', { name: '开始任务', exact: true }).click()
+  const launch = page.locator('dialog.dsh-tasks-launch-dialog[open]')
+  const includeFiles = launch.getByRole('checkbox', { name: '随首条消息发送任务附件', exact: true })
+  assert.equal(await includeFiles.isChecked(), true)
+  await launch.getByText('需求说明.pdf', { exact: true }).waitFor()
+  await launch.getByText('预览.png', { exact: true }).waitFor()
+  await includeFiles.click()
+  await launch.getByText('本条消息不会发送附件。', { exact: true }).waitFor()
+  await includeFiles.click()
+  await launch.screenshot({ path: join(output, 'launch-attachments.png'), animations: 'disabled' })
+  findings.screenshots.push('launch-attachments.png')
+  await launch.locator('button[type=submit]').click()
+  await launch.waitFor({ state: 'hidden' })
+  assert.equal(launches.length, 1)
+  assert.equal(launches[0].includeFiles, true)
+  assert.equal(launches[0].taskId, newTask.id)
+  assert.equal(launches[0].includeImages, undefined)
+  check('启动面板默认选中发送任务附件，展示 PDF 和图片，可取消勾选，提交时传入新版参数')
   await page.getByRole('button', { name: '任务详情优化', exact: true }).click()
   const inspectFields = async (theme, width) => {
     const fields = await drawer.locator('[data-task-ink=field]').evaluateAll(nodes => nodes.filter(node => node.getClientRects().length).map(node => {

@@ -4,7 +4,7 @@
   --ll-hi-select: var(--dsh-tasks-highlight); --ll-paper: var(--dsh-tasks-paper); --ll-input-fill: var(--dsh-tasks-paper);
   --ll-slip: var(--dsh-tasks-paper); --ll-hi: var(--dsh-tasks-highlight); --ll-rule-blue: var(--dsh-tasks-line);
 }
-.dsh-tasks-date-field { grid-column: 1/-1; display: grid; grid-template-columns: minmax(0,18rem); gap: 4px; }
+.dsh-tasks-date-field { display: grid; grid-template-columns: minmax(0,1fr); gap: 4px; min-width: 0; }
 .dsh-tasks-date-control { position: relative; min-width: 0; }
 .dsh-tasks-root .dsh-tasks-date-field [data-slot=date-picker] { position: relative; isolation: isolate; display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; min-height: 36px; padding: 6px 12px; background: var(--dsh-tasks-paper); color: var(--dsh-tasks-ink); border: 0; font: inherit; text-align: start; cursor: pointer; }
 .dsh-tasks-date-field [data-slot=date-picker] span { display: inline-flex; }

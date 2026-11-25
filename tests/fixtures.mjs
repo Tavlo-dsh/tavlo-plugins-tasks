@@ -129,13 +129,13 @@ export async function mountHost(t, options = {}) {
 }
 
 /** Execute the shipped browser factory and mount its real Cordis plugin. */
-export async function mountClient(t, rpc, { sessionStorage, fetch: fetchEvents, timers, browserEvents, navigate, layout, contextMenus = true, fullscreen = false } = {}) {
+export async function mountClient(t, rpc, { sessionStorage, localStorage, fetch: fetchEvents, timers, browserEvents, navigate, layout, contextMenus = true, fullscreen = false } = {}) {
   sessionStorage ??= memorySessionStorage()
   let definition
   const source = await readFile(new URL('../client.js', import.meta.url), 'utf8')
   const sandbox = {
     AbortController, TextDecoder, URLSearchParams, console, setTimeout: timers?.setTimeout ?? setTimeout, clearTimeout: timers?.clearTimeout ?? clearTimeout,
-    window: { crypto: webcrypto, sessionStorage, document: { body: {}, fullscreenElement: fullscreen ? {} : null },
+    window: { crypto: webcrypto, sessionStorage, localStorage, document: { body: {}, documentElement: { lang: 'zh-CN' }, fullscreenElement: fullscreen ? {} : null },
       addEventListener: browserEvents?.addEventListener, removeEventListener: browserEvents?.removeEventListener,
       fetch: fetchEvents ?? ((_url, { signal }) => new Promise((_resolve, reject) => {
         signal.addEventListener('abort', () => reject(new Error('RPC-only test transport closed')), { once: true })
@@ -148,7 +148,7 @@ export async function mountClient(t, rpc, { sessionStorage, fetch: fetchEvents, 
         if (name === 'react-dom') return { createPortal: element => element }
         if (name === '@deepseek-ai/dsh-client-ui-primitives') return { useModalLayer() {}, Button: 'button', Input: 'input', Tag: 'span', Checkbox: ({ checked, onChange, label }) => React.createElement('label', null, React.createElement('input', { type: 'checkbox', checked, onChange: event => onChange(event.target.checked) }), label) }
         assert.equal(name, 'react')
-        return { ...React, useId: () => 'test-id', useContext: () => false, useEffect() {}, useLayoutEffect() {}, useCallback: callback => callback, useRef: initial => ({ current: initial }), useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}] }
+        return { ...React, useId: () => 'test-id', useContext: () => false, useEffect() {}, useLayoutEffect() {}, useMemo: factory => factory(), useCallback: callback => callback, useRef: initial => ({ current: initial }), useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}] }
       })
     } } },
   }
@@ -220,8 +220,9 @@ export function memorySessionStorage() {
 function expand(element) {
   if (Array.isArray(element)) return element.flatMap(expand)
   if (!React.isValidElement(element)) return element == null ? [] : [element]
-  if (typeof element.type === 'function') return expand(element.type.prototype?.isReactComponent
-    ? new element.type(element.props).render() : element.type(element.props))
+  const type = element.type?.$$typeof === Symbol.for('react.memo') ? element.type.type : element.type
+  if (typeof type === 'function') return expand(type.prototype?.isReactComponent
+    ? new type(element.props).render() : type(element.props))
   return [{ type: element.type, props: element.props }, ...expand(element.props.children)]
 }
 

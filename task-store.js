@@ -1,6 +1,7 @@
 /** Serialized task operations over a caller-owned Storage Domain. */
 import { createHash, randomUUID } from 'node:crypto'
-import { createInputSchemas, pageSize, imageRef, imageTypes, fileRef, fileCapacity, uploadImage, uploadSchema, uploadFile, uploadFileSchema } from './task-schema.js'
+import { createInputSchemas, pageSize, imageRef, imageTypes, fileRef, fileCapacity, uploadImage, uploadSchema, uploadFile, uploadFileSchema,
+  submitDelivery, submitDeliverySchema, recoverCreationSession, recoverCreationSessionSchema, sessionId as sessionIdSchema } from './task-schema.js'
 import { externalKey, fingerprint } from './task-identity.js'
 import { between, boardPriorities, defaultColumn, orderKey, priorityCapacity } from './task-board.js'
 
@@ -15,7 +16,7 @@ class TaskFailure extends Error {
 const failure = (code, message, details = {}) => ({ ok: false, error: { code, message, details } })
 
 function publicTask(record) {
-  const { _create, _launches, _updates, _tail, _images, _files, ...task } = record
+  const { _create, _creationSessionId, _launches, _updates, _tail, _images, _files, _deliveryReceipts, ...task } = record
   if (task.launch) {
     const { input, phase, sessionId } = task.launch
     task.launch = { input, phase, ...(sessionId ? { sessionId } : {}) }
@@ -28,6 +29,52 @@ function publicTask(record) {
 
 function publicBoard(board) {
   return board && structuredClone({ ...board, priorities: boardPriorities(board) })
+}
+
+// A creator can already be executing the work. No launch, prompt or new Session took place.
+function creationBinding(record) {
+  return record._creationSessionId && { sessionId: record._creationSessionId, criteria: record._create.acceptanceCriteria || undefined }
+}
+const activeBinding = record => record.activeSessionId && (record.activeSessionId === record._creationSessionId
+  ? creationBinding(record) : record._launches?.findLast(row => row.sessionId === record.activeSessionId && row.phase === 'complete'))
+const launchInProgress = record => record.launch && !['complete', 'abandoned'].includes(record.launch.phase)
+
+function validateDeliveryRecords(record, launches) {
+  const complete = new Map(launches.filter(row => row.phase === 'complete').map(row => [row.sessionId, row]))
+  const creator = creationBinding(record)
+  if (creator) {
+    if (record._create.stage !== 'doing' || complete.has(creator.sessionId)
+      || (record.activeSessionId !== creator.sessionId && !record.previousSessionIds?.includes(creator.sessionId))) {
+      throw new Error(`tasks: inconsistent creation binding at '${record.id}'`)
+    }
+    complete.set(creator.sessionId, creator)
+  }
+  const sessions = new Map(), reviews = new Map(), submissions = new Set(), reviewRequests = new Set()
+  let latest, previousSubmission, appliedRevision = 0
+  const invalid = () => { throw new Error(`tasks: inconsistent delivery history at '${record.id}'`) }
+  for (const receipt of record._deliveryReceipts ?? []) {
+    const { deliveryId, requestId } = receipt
+    if (receipt.appliedRevision <= appliedRevision || receipt.appliedRevision > record.revision) invalid()
+    appliedRevision = receipt.appliedRevision
+    if (receipt.kind === 'submission') {
+      if (!complete.has(receipt.sessionId) || sessions.has(deliveryId) || submissions.has(requestId)
+        || (previousSubmission && !reviews.has(previousSubmission))) invalid()
+      sessions.set(deliveryId, receipt.sessionId)
+      submissions.add(requestId)
+      previousSubmission = deliveryId
+      if (receipt.sessionId === record.activeSessionId) latest = deliveryId
+    } else {
+      if (deliveryId !== previousSubmission || reviews.has(deliveryId) || reviewRequests.has(requestId)) invalid()
+      reviews.set(deliveryId, receipt.decision)
+      reviewRequests.add(requestId)
+    }
+  }
+  const { delivery } = record
+  if (delivery?.id !== latest) invalid()
+  if (delivery && (delivery.sessionId !== record.activeSessionId || delivery.criteria !== complete.get(delivery.sessionId)?.criteria
+    || delivery.status !== ({ accept: 'accepted', return: 'returned' }[reviews.get(delivery.id)] ?? 'pending')
+    || (delivery.status !== 'accepted' && record.stage === 'done')
+    || (delivery.status === 'pending' && launchInProgress(record)))) invalid()
 }
 
 /**
@@ -43,7 +90,8 @@ export function validateTaskRecords(entries) {
   const sources = new Map()
   let nextPosition = 0
   // Domain.open validates individual values. These checks validate relationships.
-  for (const [key, record] of entries) {
+  const records = new Map(entries), incoming = new Map()
+  for (const [key, record] of records) {
     const requestId = record._deleted?.requestId ?? record._create.requestId
     if (key !== record.id || requests.has(requestId)) {
       throw new Error(`tasks: inconsistent record identity or duplicate creation request at '${key}'`)
@@ -68,8 +116,24 @@ export function validateTaskRecords(entries) {
       || JSON.stringify(record.launch) !== JSON.stringify(receipts.at(-1))) {
       throw new Error(`tasks: inconsistent launch history at '${key}'`)
     }
+    validateDeliveryRecords(record, receipts)
+    for (const id of new Set([...(record.dependencyIds ?? []), ...(record._create.dependencyIds ?? [])])) {
+      if (id === key || !records.has(id)) throw new Error(`tasks: inconsistent dependency identity at '${key}'`)
+    }
+    for (const id of record.dependencyIds ?? []) incoming.set(id, (incoming.get(id) ?? 0) + 1)
     nextPosition = Math.max(nextPosition, Math.floor(record.position) + 1)
   }
+  // Nodes representing deleted prerequisites have no outgoing edges. Keep
+  // them valid, but detect cycles among all live links without recursion.
+  const ready = [...records.keys()].filter(id => !incoming.has(id))
+  for (const id of ready) {
+    for (const dependency of records.get(id).dependencyIds ?? []) {
+      const count = incoming.get(dependency) - 1
+      if (count) incoming.set(dependency, count)
+      else { incoming.delete(dependency); ready.push(dependency) }
+    }
+  }
+  if (incoming.size) throw new Error('tasks: cyclic dependencies')
   return { requests, sources, nextPosition }
 }
 
@@ -141,6 +205,33 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
   function validateLabel(id) {
     if (id && !board()?.labels?.some(label => label.id === id)) throw new TaskFailure('tasks/label-missing', 'Label no longer exists')
   }
+  function validateDependencies(ids = [], task) {
+    const prior = new Set(task?.dependencyIds), seen = new Set(), queue = [...ids]
+    for (const dependencyId of ids) {
+      const prerequisite = table.get(dependencyId)
+      // A deleted prerequisite can stay until its owner removes it, but must
+      // not be newly assigned (or reassigned after having been removed).
+      if (!prerequisite || (prerequisite._deleted && !prior.has(dependencyId))) {
+        throw new TaskFailure('tasks/dependency-missing', 'Prerequisite task no longer exists', { dependencyId })
+      }
+    }
+    if (!task) return
+    for (const id of queue) {
+      if (id === task.id) throw new TaskFailure('tasks/dependency-cycle', 'Task dependencies cannot form a cycle', { taskId: task.id })
+      if (seen.has(id)) continue
+      seen.add(id)
+      for (const dependency of table.get(id)?.dependencyIds ?? []) queue.push(dependency)
+    }
+  }
+  function assertManualCompletion(task, stage) {
+    if (stage !== 'done' || task.stage === 'done') return
+    if (task.delivery && task.delivery.status !== 'accepted') {
+      throw new TaskFailure('tasks/delivery-review-required', 'Only accepting a pending delivery can complete this task', { deliveryId: task.delivery.id })
+    }
+    if (actor === 'agent' && !task.delivery && (task.acceptanceCriteria || activeBinding(task)?.criteria)) {
+      throw new TaskFailure('tasks/delivery-required', 'Submit delivery evidence for owner review instead of completing this task')
+    }
+  }
   const subscriptionDisposers = new Set()
   const statuses = {}
 
@@ -163,7 +254,36 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
     if (error) throw new TaskFailure(error.code, error.message)
   }
 
-  async function create(input) {
+  async function recoverCreation(input, signal) {
+    const current = liveTask(input.taskId), { sessionId } = input
+    if (current._creationSessionId === sessionId && current.activeSessionId === sessionId) return { task: publicTask(current) }
+    if (current.revision !== input.expectedRevision) throw new TaskFailure('tasks/revision-conflict', 'Read the latest task before recovery')
+    // Comments are independent progress notes. Account for every revision and activity;
+    // never recover across a move, field update, launch, delivery or missing history.
+    const comments = current.commentCount ?? 0
+    if (current.revision !== 1 + comments || current._tail?.at(-1)?.id !== current.revision
+      || current._create.stage !== 'doing' || current.stage !== 'doing'
+      || current.activeSessionId || current.launch || current.previousSessionIds?.length) {
+      throw new TaskFailure('tasks/creation-unverified', 'Task changed beyond comments or already has a conversation')
+    }
+    let seq = current.revision
+    for (const event of history(current)) {
+      if (event?.id !== seq || (seq === 1 ? event.kind !== 'created' || event.source !== 'agent' : event.kind !== 'comment')) {
+        throw new TaskFailure('tasks/creation-unverified', 'Task history does not consist of agent creation and comments')
+      }
+      seq--
+    }
+    if (seq !== 0 || !await sessions?.verifyCreation?.(current, input, signal)) {
+      throw new TaskFailure('tasks/creation-unverified', 'Cannot verify the original native creation of this doing task')
+    }
+    const next = await commit(current, { ...current, activeSessionId: sessionId, _creationSessionId: sessionId,
+      revision: current.revision + 1, updatedAt: new Date().toISOString() }, [{ kind: 'bound', sessionId }])
+    const task = publicTask(next)
+    notify({ type: 'upsert', task })
+    return { task }
+  }
+
+  async function create(input, creatorSessionId) {
     const existingId = requests.get(input.requestId)
     if (existingId !== undefined) {
       const existing = table.get(existingId)
@@ -178,6 +298,8 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
         && a?.reasoningEffort === b?.reasoningEffort
       if ((existing._create.stage ?? 'todo') !== input.stage || existing._create.columnId !== input.columnId
         || ['labelId', 'priority', 'dueDate'].some(key => existing._create[key] !== input[key])
+        || (existing._create.acceptanceCriteria ?? '') !== (input.acceptanceCriteria ?? '')
+        || fingerprint(existing._create.dependencyIds ?? []) !== fingerprint(input.dependencyIds ?? [])
         || existing._create.workspaceId !== input.workspaceId || !sameModel(existing._create.model, input.model)
         || fingerprint(existing._create.externalRef ?? null) !== fingerprint(input.externalRef ?? null)) {
         throw new TaskFailure('tasks/request-conflict', 'Creation request was already used with different bindings', {
@@ -188,6 +310,7 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
     }
     assertSource(input.externalRef)
     validateLabel(input.labelId)
+    validateDependencies(input.dependencyIds)
     await validateBindings(input)
     if ([...table.entries()].filter(([, record]) => !record._deleted).length >= limits.maxTasks) {
       throw new TaskFailure('tasks/limit-reached', 'Task limit reached', { resource: 'tasks', limit: limits.maxTasks })
@@ -201,12 +324,15 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
     const record = {
       id: randomUUID(), revision: 1, title: input.title,
       ...(input.brief === '' ? {} : { brief: input.brief }),
+      ...(input.acceptanceCriteria ? { acceptanceCriteria: input.acceptanceCriteria } : {}),
+      ...(input.dependencyIds?.length ? { dependencyIds: input.dependencyIds } : {}),
       stage: input.stage, position: nextPosition, createdAt: now, updatedAt: now,
       ...(column ? { columnId: column.id } : {}),
       ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
       ...(input.model ? { model: input.model } : {}),
       ...(input.externalRef ? { externalRef: input.externalRef } : {}),
       ...Object.fromEntries(['labelId', 'priority', 'dueDate'].filter(key => input[key]).map(key => [key, input[key]])),
+      ...(creatorSessionId ? { activeSessionId: creatorSessionId, _creationSessionId: creatorSessionId } : {}),
       _create: { ...input },
     }
     if (column) {
@@ -214,7 +340,9 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
       for (const [, row] of table.entries()) if (row.columnId === column.id && row.orderKey && (!last || row.orderKey > last.orderKey)) last = row
       if (last && last.orderKey >= orderKey(record)) record.orderKey = newRank(last)
     }
-    await commit(null, record, [{ kind: 'created' }])
+    const events = [{ kind: 'created' }]
+    if (creatorSessionId) events.push({ kind: 'bound', sessionId: creatorSessionId })
+    await commit(null, record, events)
     // Commit the index and ordering only after the record is durable.
     requests.set(input.requestId, record.id)
     if (record.externalRef) sources.set(externalKey(record.externalRef), record.id)
@@ -258,6 +386,15 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
       if (input.patch.brief === '') delete next.brief
       else next.brief = input.patch.brief
     }
+    if (input.patch.acceptanceCriteria !== undefined) {
+      if (input.patch.acceptanceCriteria) next.acceptanceCriteria = input.patch.acceptanceCriteria
+      else delete next.acceptanceCriteria
+    }
+    if (input.patch.dependencyIds !== undefined) {
+      validateDependencies(input.patch.dependencyIds, current)
+      if (input.patch.dependencyIds.length) next.dependencyIds = input.patch.dependencyIds
+      else delete next.dependencyIds
+    }
     if (input.patch.externalRef !== undefined) {
       const ref = input.patch.externalRef
       if (ref && current.externalRef && externalKey(ref) !== externalKey(current.externalRef)) {
@@ -282,9 +419,92 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
     return { task: publicTask(next), mutation: { requestId: input.requestId, appliedRevision: next.revision, replayed: false } }
   }
 
+  const deliveryMutation = (record, receipt, replayed) => ({
+    task: publicTask(record), deliveryId: receipt.deliveryId,
+    mutation: { requestId: receipt.requestId, appliedRevision: receipt.appliedRevision, replayed },
+  })
+  function assertDeliveryRevision(current, expectedRevision) {
+    if (current.revision !== expectedRevision) throw new TaskFailure('tasks/revision-conflict', 'Task changed since it was loaded', {
+      taskId: current.id, currentRevision: current.revision,
+    })
+  }
+  function nextDeliveryRevision(current) {
+    if (current.revision >= Number.MAX_SAFE_INTEGER) throw new TaskFailure('tasks/limit-reached', 'Task revision capacity reached')
+    return current.revision + 1
+  }
+  async function commitDelivery(current, next, event) {
+    await commit(current, next, event ? [event] : [])
+    notify({ type: 'upsert', task: publicTask(next) })
+  }
+  async function submitTaskDelivery({ taskId, requestId, ...evidence }, sessionId) {
+    const current = liveTask(taskId), binding = activeBinding(current)
+    if (!binding || current.activeSessionId !== sessionId) {
+      throw new TaskFailure('tasks/delivery-session-mismatch', 'Only the current bound conversation may submit its delivery')
+    }
+    if (!evidence.verification) delete evidence.verification
+    if (!evidence.remaining) delete evidence.remaining
+    const digest = fingerprint(evidence)
+    const prior = current._deliveryReceipts?.find(row => row.kind === 'submission' && row.requestId === requestId)
+    if (prior) {
+      if (prior.sessionId !== sessionId || prior.fingerprint !== digest) throw new TaskFailure('tasks/request-conflict', 'Submission request changed')
+      return deliveryMutation(current, prior, true)
+    }
+    if (current.stage === 'done') throw new TaskFailure('tasks/delivery-task-done', 'The task is already done')
+    if (launchInProgress(current)) throw new TaskFailure('tasks/launch-pending', 'A new conversation is being bound to this task')
+    if (current.delivery?.status === 'pending') throw new TaskFailure('tasks/delivery-pending', 'A delivery is already awaiting review')
+    // Reserve the review slot as well: reaching the limit must never strand a pending delivery.
+    if ((current._deliveryReceipts?.length ?? 0) >= 10000) throw new TaskFailure('tasks/limit-reached', 'Delivery receipt limit reached')
+    const revision = nextDeliveryRevision(current), updatedAt = new Date().toISOString()
+    const delivery = { id: randomUUID(), sessionId, ...evidence, ...(binding.criteria ? { criteria: binding.criteria } : {}),
+      submittedAt: updatedAt, status: 'pending' }
+    const receipt = { kind: 'submission', requestId, sessionId, deliveryId: delivery.id, fingerprint: digest, appliedRevision: revision }
+    const next = { ...current, revision, updatedAt, delivery, _deliveryReceipts: [...(current._deliveryReceipts ?? []), receipt] }
+    await commitDelivery(current, next, { kind: 'delivery-submitted', sessionId, text: delivery.summary })
+    return deliveryMutation(next, receipt, false)
+  }
+  async function reviewTaskDelivery({ taskId, expectedRevision, deliveryId, requestId, decision, feedback }) {
+    const current = liveTask(taskId), { delivery } = current
+    const digest = fingerprint({ deliveryId, expectedRevision, decision, feedback: feedback || undefined })
+    const prior = current._deliveryReceipts?.find(row => row.kind === 'review' && row.requestId === requestId)
+    if (prior) {
+      if (prior.fingerprint !== digest) throw new TaskFailure('tasks/request-conflict', 'Review request changed')
+      return deliveryMutation(current, prior, true)
+    }
+    assertDeliveryRevision(current, expectedRevision)
+    if (delivery?.id !== deliveryId || delivery.status !== 'pending') {
+      throw new TaskFailure('tasks/delivery-not-pending', 'This delivery is no longer awaiting review')
+    }
+    const revision = nextDeliveryRevision(current), updatedAt = [new Date().toISOString(), delivery.submittedAt].sort().at(-1)
+    const status = decision === 'accept' ? 'accepted' : 'returned', stage = decision === 'accept' ? 'done' : 'doing'
+    const receipt = { kind: 'review', requestId, deliveryId, decision, fingerprint: digest, appliedRevision: revision }
+    const next = { ...current, revision, updatedAt, stage,
+      ...(current.columnId && current.stage !== stage ? { columnId: defaultColumn(stage), orderKey: undefined } : {}),
+      delivery: { ...delivery, status, reviewedAt: updatedAt, ...(feedback ? { feedback } : {}) },
+      _deliveryReceipts: [...current._deliveryReceipts, receipt] }
+    await commitDelivery(current, next, { kind: `delivery-${status}`, sessionId: delivery.sessionId, text: feedback || delivery.summary })
+    return deliveryMutation(next, receipt, false)
+  }
+  async function continueTaskDelivery({ taskId, expectedRevision, deliveryId }) {
+    const current = liveTask(taskId), { delivery } = current
+    if (delivery?.id !== deliveryId || delivery.status !== 'returned' || delivery.sessionId !== current.activeSessionId) {
+      throw new TaskFailure('tasks/delivery-not-returned', 'No current returned delivery to continue')
+    }
+    if (delivery.continuedAt) return { task: publicTask(current) }
+    assertDeliveryRevision(current, expectedRevision)
+    if (launchInProgress(current)) throw new TaskFailure('tasks/launch-pending', 'A new conversation is being bound to this task')
+    if (!sessions?.continueDelivery) throw new TaskFailure('tasks/session-unavailable', 'Session service unavailable')
+    const revision = nextDeliveryRevision(current)
+    await sessions.continueDelivery(taskId, delivery)
+    const updatedAt = [new Date().toISOString(), delivery.reviewedAt].sort().at(-1)
+    const next = { ...current, revision, updatedAt, delivery: { ...delivery, continuedAt: updatedAt } }
+    await commitDelivery(current, next)
+    return { task: publicTask(next) }
+  }
+
   async function setStage(input) {
     const current = liveTask(input.taskId)
     if (current.revision !== input.expectedRevision) throw new TaskFailure('tasks/revision-conflict', 'Task changed since it was loaded', { taskId: current.id, currentRevision: current.revision })
+    assertManualCompletion(current, input.stage)
     if (current.revision >= Number.MAX_SAFE_INTEGER) throw new TaskFailure('tasks/limit-reached', 'Task revision capacity reached', { resource: 'revision' })
     const next = await commit(current, { ...current, ...(current.columnId && current.stage !== input.stage ? { columnId: defaultColumn(input.stage), orderKey: undefined } : {}), stage: input.stage, revision: current.revision + 1, updatedAt: new Date().toISOString() })
     notify({ type: 'upsert', task: publicTask(next) })
@@ -313,6 +533,7 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
     const task = table.get(input.taskId), column = findColumn(input.columnId)
     if (!task || task._deleted) throw new TaskFailure('tasks/not-found', 'Task does not exist')
     if (task.revision !== input.expectedRevision) throw new TaskFailure('tasks/revision-conflict', 'Task changed before drop')
+    assertManualCompletion(task, column.stage)
     const rows = columnTasks(column.id, task.id)
     let index = rows.length
     if (input.anchor) {
@@ -335,10 +556,16 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
     let columns = [...current.columns]
     if (input.action === 'add') {
       if (columns.length >= 100) throw new TaskFailure('tasks/limit-reached', 'Column limit reached')
-      columns.push({ id: randomUUID(), stage: input.stage, name: input.name })
+      columns.push({ id: randomUUID(), stage: input.stage, name: input.name, ...(input.color ? { color: input.color } : {}) })
     } else {
       const column = findColumn(input.columnId)
-      if (input.action === 'rename') columns = columns.map(row => row.id === column.id ? { ...row, name: input.name } : row)
+      if (input.action === 'rename') columns = columns.map(row => {
+        if (row.id !== column.id) return row
+        const next = { ...row, name: input.name }
+        if (input.color === null) delete next.color
+        else if (input.color !== undefined) next.color = input.color
+        return next
+      })
       if (input.action === 'remove') {
         if (column.id === defaultColumn(column.stage) || columnTasks(column.id).length) throw new TaskFailure('tasks/column-not-empty-or-default', 'Only empty custom columns can be removed')
         columns = columns.filter(row => row.id !== column.id)
@@ -456,13 +683,18 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
         if (!sessions?.fork) throw new TaskFailure('tasks/fork-unavailable', 'Native session fork is unavailable')
       }
       if (record.revision !== input.expectedRevision) throw new TaskFailure('tasks/revision-conflict', 'Task changed since it was loaded')
+      if (record.delivery?.status === 'pending') throw new TaskFailure('tasks/delivery-pending', 'Review the pending delivery before replacing its conversation')
+      const blockers = (record.dependencyIds ?? []).filter(id => table.get(id)?.stage !== 'done')
+      if (blockers.length) throw new TaskFailure('tasks/dependencies-blocked', 'Complete the prerequisite tasks before launching', { dependencyIds: blockers })
       if (!sessions) throw new TaskFailure('tasks/session-unavailable', 'Session service unavailable')
       const invalid = await options?.validate(input)
       if (invalid) throw new TaskFailure(invalid.code, invalid.message)
       await sessions.checkLaunch(record, input)
       if ((record._launches?.length ?? 0) >= (limits.maxLaunchesPerTask ?? 1000)) throw new TaskFailure('tasks/limit-reached', 'Launch history limit reached')
       receipt = { input, ...(input.forkFromSessionId ? { phase: 'forking' } : { sessionId: randomUUID(), phase: 'prepared' }),
-        ...(input.includeImages && record._images?.length ? { images: record._images } : {}) }
+        ...(record.acceptanceCriteria ? { criteria: record.acceptanceCriteria } : {}),
+        ...((input.includeFiles || input.includeImages) && record._images?.length ? { images: record._images } : {}),
+        ...(input.includeFiles && record._files?.length ? { files: record._files } : {}) }
       record = await save(receipt)
       if (receipt.phase === 'forking') {
         let child
@@ -492,21 +724,25 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
     }
     if (receipt.attachWorkspaceId) await sessions.repairForkAttachment(receipt)
     const imageParts = receipt.images?.length ? await sessions.imageParts(receipt.images) : []
+    const fileParts = receipt.files?.length ? await sessions.fileParts(receipt, receipt.files) : []
     if (receipt.phase === 'created') {
       await sessions.select(receipt)
       const { attachWorkspaceId, ...ready } = receipt
       receipt = { ...ready, phase: 'sending' }
       record = await save(receipt)
     }
-    try { await sessions.prompt(receipt, imageParts) }
+    try { await sessions.prompt(receipt, [...imageParts, ...fileParts]) }
     catch (error) {
-      if (imageParts.length && error.details?.causeCode === 'session/attachment-invalid') {
+      if ((imageParts.length || fileParts.length) && error.details?.causeCode === 'session/attachment-invalid') {
         await save({ ...receipt, phase: 'created' })
-        throw new TaskFailure('tasks/prompt-image-rejected', 'Session rejected image input')
+        if (imageParts.length && (!fileParts.length || /IMAGE/.test(error.details.attachmentReason ?? ''))) {
+          throw new TaskFailure('tasks/prompt-image-rejected', 'Session rejected image input')
+        }
+        throw new TaskFailure('tasks/prompt-file-rejected', 'Session rejected a task file')
       }
       throw error
     }
-    receipt = { input: receipt.input, sessionId: receipt.sessionId, phase: 'complete' }
+    receipt = { input: receipt.input, sessionId: receipt.sessionId, phase: 'complete', ...(receipt.criteria ? { criteria: receipt.criteria } : {}) }
     const workspaceId = receipt.input.forkFromSessionId ? await sessions.forkWorkspace(receipt.sessionId) : receipt.input.workspaceId
     record = await save(receipt, { workspaceId })
     return { task: publicTask(record), sessionId: receipt.sessionId }
@@ -529,7 +765,10 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
           } : {}),
           revision: current.revision + 1, updatedAt: new Date().toISOString(),
       }
-      if (bind && !bind.workspaceId) delete updated.workspaceId
+      if (bind) {
+        if (!bind.workspaceId) delete updated.workspaceId
+        if (current.activeSessionId !== nextReceipt.sessionId) delete updated.delivery
+      }
       const next = await commit(current, updated, bind ? [{ kind: 'bound', sessionId: nextReceipt.sessionId }] : [])
       notify({ type: 'upsert', task: publicTask(next) })
       return next
@@ -632,7 +871,16 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
     return { task }
   }
 
-  function execute(operation, input, signal, source = 'service') {
+  function execute(operation, input, signal, source = 'service', agentSessionId) {
+    if (source !== 'rpc' && (operation === 'review-delivery' || operation === 'continue-delivery')) {
+      return Promise.resolve(failure('tasks/not-found', 'Unknown operation', { endpoint: operation }))
+    }
+    if (operation === recoverCreationSession && (source !== 'agent' || !sessionIdSchema.safeParse(agentSessionId).success)) {
+      return Promise.resolve(failure('tasks/creation-unverified', 'Recovery requires a native Agent conversation'))
+    }
+    if (operation === submitDelivery && (source !== 'agent' || !sessionIdSchema.safeParse(agentSessionId).success)) {
+      return Promise.resolve(failure('tasks/delivery-session-mismatch', 'Delivery requires an authenticated Agent conversation'))
+    }
     if (closing) return Promise.resolve(failure('tasks/unavailable', 'Task store is closing'))
     if (unavailableCode) return Promise.resolve(failure(unavailableCode, 'Task storage must be reopened'))
     // Isolate trusted in-process callers' mutable objects before entering the queue.
@@ -648,7 +896,9 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
         const schema = operation === 'create' && requests.has(input?.requestId) ? creationReplay
           : operation === 'update' && (record?._deleted || record?._updates?.some(row => row.requestId === input?.requestId)) ? updateReplay
           : operation === 'launch' && record?._launches?.some(row => row.input.requestId === input?.requestId) ? launchReplay
-          : operation === uploadImage ? uploadSchema : operation === uploadFile ? uploadFileSchema : schemas.get(operation)
+          : operation === uploadImage ? uploadSchema : operation === uploadFile ? uploadFileSchema
+          : operation === recoverCreationSession ? recoverCreationSessionSchema
+          : operation === submitDelivery ? submitDeliverySchema : schemas.get(operation)
         if (!schema) return failure('tasks/not-found', 'Unknown operation', { endpoint: operation })
         const parsed = schema.safeParse(input)
         if (!parsed.success) return failure('tasks/bad-request', 'Invalid task input', {
@@ -656,13 +906,14 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
         })
         let value
         if (operation === 'capabilities') {
-          value = { contractVersion: 1, operations: [...schemas.keys()], features: {
+          value = { contractVersion: 1, operations: [...schemas.keys()].filter(key => source === 'rpc' || !['review-delivery', 'continue-delivery'].includes(key)), features: {
+            acceptanceCriteria: true, taskDependencies: true, taskDelivery: true,
             externalRef: true, externalRefUnique: true, durableUpdateReplay: true, snapshotWatch: true,
             filteredList: true, boardColumns: !!board(), boardPriorities: !!board(), collaboration: !!archive,
-            taskImages: !!attachments?.limits(), taskFiles: !!attachments?.fileLimits?.(),
+            taskImages: !!attachments?.limits(), taskFiles: !!attachments?.fileLimits?.(), taskFileLaunch: !!sessions?.canSendFiles?.(),
           }, limits: { maxTitleLength: limits.maxTitleLength, maxBriefLength: limits.maxBriefLength,
             maxTasks: limits.maxTasks, maxUpdatesPerTask: limits.maxUpdatesPerTask ?? 10000 } }
-        } else if (operation === 'images') {
+        } else if (operation === 'images' || operation === 'files') {
           const target = parsed.data.taskId && liveTask(parsed.data.taskId)
           const launchRequestId = parsed.data.launchRequestId
           const receipt = launchRequestId && target?.launch
@@ -670,12 +921,12 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
             || !['prepared', 'forking', 'created', 'sending'].includes(receipt.phase))) {
             throw new TaskFailure('tasks/not-found', 'Pending launch does not exist')
           }
-          value = { limits: attachments?.limits() ?? null, images: structuredClone((launchRequestId ? receipt.images : target?._images) ?? []),
+          const images = (receipt ? receipt.images : target?._images) ?? []
+          const files = (receipt ? receipt.files : target?._files) ?? []
+          value = { ...(operation === 'images'
+            ? { limits: attachments?.limits() ?? null, images: structuredClone(images) }
+            : { limits: attachments?.fileLimits?.() ?? null, files: structuredClone([...images, ...files]) }),
             ...(target ? { revision: target.revision } : {}), ...(launchRequestId ? { launchRequestId } : {}) }
-        } else if (operation === 'files') {
-          const target = parsed.data.taskId && liveTask(parsed.data.taskId)
-          value = { files: structuredClone([...(target?._images ?? []), ...(target?._files ?? [])]),
-            limits: attachments?.fileLimits?.() ?? null, ...(target ? { revision: target.revision } : {}) }
         } else if (operation === uploadImage || operation === uploadFile || operation === 'remove-image' || operation === 'remove-file') {
           value = await mutateAttachment(parsed.data, operation)
         } else if (operation === 'board') {
@@ -740,9 +991,19 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
             const existing = requests.has(input.requestId) && table.get(requests.get(input.requestId))
             if (!existing?._deleted) parsed.data.stage = existing?._create?.stage ?? findColumn(parsed.data.columnId).stage
           }
-          value = await create(parsed.data)
+          const creator = source === 'agent' && parsed.data.stage === 'doing' && sessionIdSchema.safeParse(agentSessionId).success
+            ? agentSessionId : undefined
+          value = await create(parsed.data, creator)
+        } else if (operation === recoverCreationSession) {
+          value = await recoverCreation(parsed.data, signal)
         } else if (operation === 'update') {
           value = await updateTask(parsed.data)
+        } else if (operation === submitDelivery) {
+          value = await submitTaskDelivery(parsed.data, agentSessionId)
+        } else if (operation === 'review-delivery') {
+          value = await reviewTaskDelivery(parsed.data)
+        } else if (operation === 'continue-delivery') {
+          value = await continueTaskDelivery(parsed.data)
         } else if (operation === 'launch' || operation === 'resume-launch') {
           value = await launchTask(parsed.data, operation === 'resume-launch')
         } else if (operation === 'abandon-launch') {
@@ -767,7 +1028,7 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
         }
         return failure(unknown ? 'tasks/persistence-unknown' : 'tasks/persistence-failed',
           unknown ? 'Storage state is uncertain; reload before retrying' : 'Task storage operation failed', {
-            operation,
+            operation: typeof operation === 'symbol' ? operation.description : operation,
             ...(typeof error?.code === 'string' ? { storageCode: error.code } : {}),
           })
       }
@@ -818,7 +1079,10 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
   }
 
   function updateStatus(taskId, status) {
-    if (closing || unavailableCode || JSON.stringify(statuses[taskId]) === JSON.stringify(status)) return
+    if (closing || unavailableCode) return
+    const previous = statuses[taskId]
+    if (previous?.sessionId === status.sessionId && previous?.status === status.status
+      && (status.since === undefined || previous.since === status.since)) return
     let task
     try { task = table.get(taskId) }
     catch (error) {
@@ -828,8 +1092,14 @@ export function createTaskStore(domain, limits, reportError = () => {}, options,
       throw error
     }
     if (!task || task._deleted || task.activeSessionId !== status.sessionId) return
-    statuses[taskId] = status
-    notify({ type: 'status', taskId, status })
+    const next = {
+      sessionId: status.sessionId,
+      status: status.status,
+      since: status.since ?? (previous?.sessionId === status.sessionId && previous?.status === status.status
+        ? previous.since : new Date().toISOString()),
+    }
+    statuses[taskId] = next
+    notify({ type: 'status', taskId, status: next })
   }
   return { execute, watch, close, updateStatus }
 }

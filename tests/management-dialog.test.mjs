@@ -106,3 +106,43 @@ test('Manager commands still pass the current revision and protect columns and l
     ['editLabels', { action: 'remove', labelId: 'free', expectedRevision: 12 }],
   ])
 })
+
+test('ColumnManager supports adding, recoloring, committing presets and clearing custom column colors', () => {
+  const ui = harness()
+  const coloredBoard = {
+    revision: 15,
+    columns: [
+      { id: 'stage:todo', stage: 'todo' },
+      { id: 'review', stage: 'doing', name: 'Review', color: '#d96b6b' },
+    ],
+  }
+  const columns = ui.ColumnManager({ ...ui.props, board: coloredBoard })
+  const row = id => node(columns, child => child.props['data-column-id'] === id)
+  const submit = (form, fields) => form.props.onSubmit({
+    preventDefault() {},
+    currentTarget: { elements: Object.fromEntries(Object.entries(fields).map(([name, value]) => [name, { value }])) },
+  })
+  const columnAdd = node(columns, child => child.type === 'form' && child.props.className.includes('dsh-tasks-manage-create'))
+
+  submit(columnAdd, { name: 'QA', stage: 'doing', color: '#2d9d9c' })
+  submit(row('review'), { name: 'Review', color: '#8451b4' })
+  submit(row('review'), { name: 'Review', color: '' })
+  submit(row('stage:todo'), { name: 'To do', color: '' })
+
+  // Immediate commit via ColumnColorPicker preset/reset callback.
+  const reviewPicker = node(row('review'), child => typeof child.props?.onCommit === 'function')
+  assert(reviewPicker)
+  reviewPicker.props.onCommit('#3b9e6c', {
+    currentTarget: { closest: () => ({ elements: { name: { value: 'Reviewing' } } }) },
+  })
+  reviewPicker.props.onCommit(null)
+
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.calls)), [
+    ['editColumns', { action: 'add', name: 'QA', stage: 'doing', color: '#2d9d9c', expectedRevision: 15 }],
+    ['editColumns', { action: 'rename', columnId: 'review', name: 'Review', color: '#8451b4', expectedRevision: 15 }],
+    ['editColumns', { action: 'rename', columnId: 'review', name: 'Review', color: null, expectedRevision: 15 }],
+    ['editColumns', { action: 'rename', columnId: 'stage:todo', name: 'To do', expectedRevision: 15 }],
+    ['editColumns', { action: 'rename', columnId: 'review', name: 'Reviewing', color: '#3b9e6c', expectedRevision: 15 }],
+    ['editColumns', { action: 'rename', columnId: 'review', name: 'Review', color: null, expectedRevision: 15 }],
+  ])
+})

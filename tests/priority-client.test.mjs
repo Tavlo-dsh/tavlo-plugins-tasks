@@ -10,7 +10,8 @@ const record = (id, priority, position) => ({
 
 function priorityPicker(client, emptyLabel) {
   const label = client.render().find(node => node.type === 'label'
-    && node.props.children[0] === '优先级'
+    && (node.props.children[0] === '优先级' || node.props.children[0]?.props?.children?.includes?.('优先级'))
+    && node.props.children[1]?.props?.name === 'priority'
     && node.props.children[1].props.children[0].props.children === emptyLabel)
   assert(label, `Missing priority picker with default ${emptyLabel}`)
   const picker = label.props.children[1]
