@@ -34,7 +34,7 @@ dsh plugin --profile web add "$(pwd)"
 
 ```bash
 npm pack
-dsh plugin --profile web add ./tavlo-dsh-dsh-plugin-tasks-0.2.16.tgz
+dsh plugin --profile web add ./tavlo-dsh-dsh-plugin-tasks-0.2.17.tgz
 dsh --profile web
 ```
 

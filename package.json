@@ -1,6 +1,6 @@
 {
   "name": "@tavlo-dsh/dsh-plugin-tasks",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
