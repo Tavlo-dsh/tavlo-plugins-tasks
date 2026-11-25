@@ -80,13 +80,13 @@ jobs:
         with:
           name: npm-package
           path: release
-      - name: Stage with npm Trusted Publishing
+      - name: Publish with npm Trusted Publishing
         if: github.event_name != 'workflow_dispatch' || !inputs.bootstrap
-        run: npm stage publish ./release/package.tgz --ignore-scripts --provenance --access public
+        run: npm publish ./release/package.tgz --ignore-scripts --provenance --access public
       - name: First publication with a one-time npm token
         if: github.event_name == 'workflow_dispatch' && inputs.bootstrap
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: |
           : "${NODE_AUTH_TOKEN:?Configure NPM_BOOTSTRAP_TOKEN in this repository first}"
-          npm stage publish ./release/package.tgz --ignore-scripts --provenance --access public
+          npm publish ./release/package.tgz --ignore-scripts --provenance --access public
